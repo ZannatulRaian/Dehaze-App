@@ -1,6 +1,6 @@
 <div align="center">
 
-# Urban Fog Cleaner
+# Urban Fog Cleaner ( Dehaze App )
 
 **Upload a foggy city photo, tune a four-stage enhancement pipeline, and download a clear result.**
 
