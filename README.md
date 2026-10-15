@@ -15,7 +15,7 @@
 
 ## 📷 Main View
 
-![Urban Fog Cleaner preview](assets/Preview/preview.gif)
+![Urban Fog Cleaner preview](assets/Preview/preview.mp4)
 
 ---
 
