@@ -9,11 +9,13 @@
 ![Streamlit](https://img.shields.io/badge/Streamlit-app-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)
 ![OpenCV](https://img.shields.io/badge/OpenCV-DIP-5C3EE8?style=for-the-badge&logo=opencv&logoColor=white)
 
-[![Urban Fog Cleaner preview](assets/Preview/preview.gif)](assets/Preview/Screen%20Recording%202026-10-15%20123729.mp4)
-
-<sub>▶ Click the preview to watch the full screen recording.</sub>
-
 </div>
+
+---
+
+## 📷 Main View
+
+![Urban Fog Cleaner preview](assets/Preview/preview.gif)
 
 ---
 
@@ -28,12 +30,6 @@ Fog removal runs first using the **Dark Channel Prior**, then three tunable enha
 ## Live demo
 
 👉 **https://dehazeapp.streamlit.app/**
-
-## Demo video
-
-A full screen recording of the app in action is in [`assets/Preview`](assets/Preview/Screen%20Recording%202026-10-15%20123729.mp4).
-
-<video src="assets/Preview/Screen%20Recording%202026-10-15%20123729.mp4" controls muted width="100%"></video>
 
 ## Features
 
@@ -50,13 +46,14 @@ A full screen recording of the app in action is in [`assets/Preview`](assets/Pre
 
 The pipeline in `dehaze_app.py` runs in this order:
 
-| Step | Stage | What it does |
-|------|-------|--------------|
-| 1 | **Dark Channel Prior** (always on) | Estimates the airlight and a per-pixel transmission map, refined with a **guided filter** so it follows real edges, then recovers the haze-free scene `J = (I − A) / t + A` |
-| 2 | **Adaptive Smoothing** | Edge-preserving bilateral filter; smooths flat areas and the noise fog removal amplifies, keeps edges |
-| 3 | **Adaptive Sharpening** | Unsharp mask on luminance with the added detail capped, so strong edges don't overshoot into halos |
-| 4 | **Histogram Stretch** | Linear contrast stretch of luminance, clipping 0–2 % from each end |
-| 5 | **Frequency-Domain Filter** | FFT high-frequency emphasis with a smooth Gaussian high-pass (no ringing) and mirror padding (no border wrap-around) |
+
+| Step | Stage                              | What it does                                                                                                                                                                |
+| ---- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | **Dark Channel Prior** (always on) | Estimates the airlight and a per-pixel transmission map, refined with a**guided filter** so it follows real edges, then recovers the haze-free scene `J = (I − A) / t + A` |
+| 2    | **Adaptive Smoothing**             | Edge-preserving bilateral filter; smooths flat areas and the noise fog removal amplifies, keeps edges                                                                       |
+| 3    | **Adaptive Sharpening**            | Unsharp mask on luminance with the added detail capped, so strong edges don't overshoot into halos                                                                          |
+| 4    | **Histogram Stretch**              | Linear contrast stretch of luminance, clipping 0–2 % from each end                                                                                                         |
+| 5    | **Frequency-Domain Filter**        | FFT high-frequency emphasis with a smooth Gaussian high-pass (no ringing) and mirror padding (no border wrap-around)                                                        |
 
 **Design notes**
 
