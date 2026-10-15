@@ -9,7 +9,9 @@
 ![Streamlit](https://img.shields.io/badge/Streamlit-app-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)
 ![OpenCV](https://img.shields.io/badge/OpenCV-DIP-5C3EE8?style=for-the-badge&logo=opencv&logoColor=white)
 
-![Urban Fog Cleaner preview](assets/Preview/preview.gif)
+[![Urban Fog Cleaner preview](assets/Preview/preview.gif)](assets/Preview/Screen%20Recording%202026-10-15%20123729.mp4)
+
+<sub>▶ Click the preview to watch the full screen recording.</sub>
 
 </div>
 
@@ -26,6 +28,12 @@ Fog removal runs first using the **Dark Channel Prior**, then three tunable enha
 ## Live demo
 
 👉 **https://dehazeapp.streamlit.app/**
+
+## Demo video
+
+A full screen recording of the app in action is in [`assets/Preview`](assets/Preview/Screen%20Recording%202026-10-15%20123729.mp4).
+
+<video src="assets/Preview/Screen%20Recording%202026-10-15%20123729.mp4" controls muted width="100%"></video>
 
 ## Features
 
@@ -86,7 +94,7 @@ Dehaze-App/
     ├── cars/              # Pixel-art car sprites (header strip)
     ├── clouds/            # Pixel-art cloud sprites (header strip)
     ├── test images/       # Sample hazy photos to try the app with
-    └── Preview/           # Demo recording (preview.gif, .mp4)
+    └── Preview/           # Demo recording (preview.gif + full .mp4 recording)
 ```
 
 ## Try it with the sample images
