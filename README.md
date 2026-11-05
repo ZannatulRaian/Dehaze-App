@@ -13,7 +13,7 @@
 
 ---
 
-## 📷 Main View
+## Main View
 
 ![Dehaze App preview](assets/Preview/preview.gif)
 
