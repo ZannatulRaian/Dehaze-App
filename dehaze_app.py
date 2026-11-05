@@ -118,7 +118,7 @@ def adaptive_sharpening(img, strength=50):
     return _from_ycc(ycc, y + amount * detail)
 
 
-def frequency_enhancement(img, strength=55):
+def frequency_enhancement(img, strength=55, cutoff=FREQ_CUTOFF):
     """High-frequency emphasis on luminance: a smooth (Gaussian) high-pass, so
     there is no ringing from a hard cutoff, and the image is mirror-padded so
     the FFT's wrap-around doesn't leak detail across opposite borders."""
@@ -134,7 +134,7 @@ def frequency_enhancement(img, strength=55):
     v = np.arange(rows) - rows // 2
     u = np.arange(cols) - cols // 2
     d2 = v[:, None] ** 2 + u[None, :] ** 2
-    high_pass = 1.0 - np.exp(-d2 / (2.0 * FREQ_CUTOFF ** 2))
+    high_pass = 1.0 - np.exp(-d2 / (2.0 * cutoff ** 2))
     response = 1.0 + (gain - 1.0) * high_pass      # 1.0 at DC, `gain` at fine detail
     out = np.real(ifft2(ifftshift(spectrum * response)))
     out = out[pad:pad + h, pad:pad + w]
@@ -157,12 +157,12 @@ def _guided_filter(guide, src, radius, eps):
     return mean(a) * guide + mean(b)
 
 
-def dark_channel_prior(img, omega=0.95, t0=0.15):
+def dark_channel_prior(img, omega=0.95, t0=0.15, patch=0):
     """Single-image haze removal (He et al.): estimate the airlight A and a
     per-pixel transmission t, then recover J = (I - A) / t + A."""
     I = img.astype(np.float32) / 255.0
     h, w = I.shape[:2]
-    size = max(3, round(max(h, w) / 80)) | 1             # odd window, ~15 px at 1200 px
+    size = (max(3, int(patch)) | 1) if patch else (max(3, round(max(h, w) / 80)) | 1)  # odd window; auto ~15 px at 1200 px
 
     dark = ndimage.minimum_filter(I.min(axis=2), size=size)
 
@@ -188,19 +188,230 @@ def dark_channel_prior(img, omega=0.95, t0=0.15):
 
 
 @st.cache_data(show_spinner=False)
-def cached_dark_channel_prior(img):
-    return dark_channel_prior(img)
+def cached_dark_channel_prior(img, omega=0.95, t0=0.15, patch=0):
+    return dark_channel_prior(img, omega, t0, patch)
 
 
-def dehaze_pipeline(img, hist_strength=55, freq_strength=55, smooth_strength=50, sharpen_strength=50):
+def tone_adjust(img, gamma=1.0, saturation=1.0):
+    """Final gamma and colour-saturation step (both 1.0 = untouched)."""
+    if gamma == 1.0 and saturation == 1.0:
+        return img
+    f = img.astype(np.float32) / 255.0
+    if saturation != 1.0:
+        lum = (f @ np.array([0.299, 0.587, 0.114], dtype=np.float32))[..., None]
+        f = np.clip(lum + (f - lum) * saturation, 0.0, 1.0)
+    if gamma != 1.0:
+        f = f ** (1.0 / gamma)
+    return np.clip(f * 255.0 + 0.5, 0, 255).astype(np.uint8)
+
+
+def dehaze_pipeline(img, hist_strength=55, freq_strength=55, smooth_strength=50, sharpen_strength=50,
+                    omega=0.95, t0=0.15, patch=0, use_dcp=True, gamma=1.0, saturation=1.0,
+                    cutoff=FREQ_CUTOFF):
     """Returns (result, info). info["hist_range"] is the luminance range the
     histogram stage actually stretched, for the slider's readout."""
-    result = cached_dark_channel_prior(img)                    # STEP 1 — fog removal
+    result = cached_dark_channel_prior(img, omega, t0, patch) if use_dcp else img   # STEP 1 — fog removal
     result = adaptive_smoothing(result, smooth_strength)         # STEP 2
     result = adaptive_sharpening(result, sharpen_strength)       # STEP 3
     result, hist_range = histogram_stretch(result, hist_strength, return_range=True)  # STEP 4
-    result = frequency_enhancement(result, freq_strength)      # STEP 5
+    result = frequency_enhancement(result, freq_strength, cutoff)      # STEP 5
+    result = tone_adjust(result, gamma, saturation)            # final tone (optional)
     return result, {"hist_range": hist_range}
+
+
+# ============================================================
+# SAMPLE SCENE, FOG SIMULATION, MEASUREMENTS, TEST IMAGES, PRESETS
+# ============================================================
+FOG_AIRLIGHT = np.array([216, 223, 229], dtype=np.float32)
+
+
+def make_sample_scene(w=640, h=400):
+    """Synthetic city street plus its depth map (0 = near, 1 = far), so fog can be
+    simulated with the real scattering model and the clear scene is known."""
+    k = w / 512.0
+    rnd = random.Random(11)
+    hz = int(h * 0.56)
+    img = np.zeros((h, w, 3), np.uint8)
+    depth = np.ones((h, w), np.float32)
+    t = np.linspace(0, 1, hz)[:, None, None]
+    img[:hz] = (np.array([58, 108, 176]) * (1 - t) + np.array([211, 227, 242]) * t).astype(np.uint8)
+    img[hz:] = (60, 63, 67)
+    depth[hz:] = np.linspace(0.74, 0.04, h - hz)[:, None]
+
+    def buildings(dv, col, wmin, wr, hmin, hr, x0, x1):
+        col = np.array(col, np.float32)
+        win = tuple(int(c) for c in (col * 0.5 + np.array([255, 235, 170]) * 0.5))
+        bx = x0
+        while bx < x1:
+            bw, bh = (wmin + rnd.random() * wr) * k, (hmin + rnd.random() * hr) * k
+            xa, xb, ya, yb = int(bx), int(bx + bw), int(hz - bh), hz + int(8 * k)
+            cv2.rectangle(img, (xa, ya), (xb, yb), tuple(int(c) for c in col), -1)
+            cv2.rectangle(depth, (xa, ya), (xb, yb), float(dv), -1)
+            for wy in range(ya + int(8 * k), hz - int(6 * k), int(12 * k)):
+                for wx in range(xa + int(5 * k), xb - int(6 * k), int(9 * k)):
+                    if rnd.random() > 0.45:
+                        cv2.rectangle(img, (wx, wy), (wx + int(4 * k), wy + int(6 * k)), win, -1)
+            bx += bw + (2 + rnd.random() * 4) * k
+
+    buildings(0.90, (109, 129, 150), 26, 50, 60, 110, int(-10 * k), w)
+    buildings(0.65, (78, 95, 114), 34, 50, 50, 150, int(-10 * k), w)
+    buildings(0.42, (53, 66, 79), 40, 40, 40, 170, int(-10 * k), w)
+    cv2.fillPoly(img, [np.array([[w * .46, hz], [w * .54, hz], [w * 1.1, h], [-w * .1, h]], np.int32)], (37, 39, 43))
+    for i in range(1, 9):
+        tt = i / 9
+        py, sw = hz + (h - hz) * tt * tt, (1 + tt * 10) * k
+        cv2.rectangle(img, (int(w / 2 - sw / 2), int(py)), (int(w / 2 + sw / 2), int(py + (2 + tt * 14) * k)),
+                      (232, 211, 74), -1)
+    buildings(0.12, (29, 36, 44), 70, 60, 170, 90, int(-20 * k), int(120 * k))
+    buildings(0.12, (29, 36, 44), 70, 60, 170, 90, int(w - 130 * k), int(w + 20 * k))
+    for cx, cy, sc, col in [(200, hz / k + 40, .6, (179, 38, 30)), (300, hz / k + 62, .9, (216, 216, 216)),
+                            (110, hz / k + 104, 1.3, (43, 95, 168)), (330, hz / k + 120, 1.5, (224, 162, 26))]:
+        x0, y0, s_ = int(cx * k), int(cy * k), sc * k
+        cv2.rectangle(img, (x0, y0), (int(x0 + 60 * s_), int(y0 + 16 * s_)), col, -1)
+        cv2.rectangle(img, (int(x0 + 12 * s_), int(y0 - 10 * s_)), (int(x0 + 48 * s_), int(y0 + s_)), col, -1)
+        for wx in (6, 44):
+            cv2.rectangle(img, (int(x0 + wx * s_), int(y0 + 13 * s_)), (int(x0 + (wx + 10) * s_), int(y0 + 20 * s_)), (17, 17, 17), -1)
+        cv2.rectangle(depth, (x0, int(y0 - 10 * s_)), (int(x0 + 60 * s_), int(y0 + 20 * s_)), 0.157, -1)
+    return img, depth
+
+
+@st.cache_data(show_spinner=False)
+def simulate_fog(img, depth, density):
+    """Atmospheric scattering model I = J·t + A·(1 − t), t = exp(−β·d). Photos have no depth
+    map, so depth is guessed to grow toward the top of the frame."""
+    h, w = img.shape[:2]
+    if depth is None:
+        depth = np.repeat(np.linspace(0.95, 0.15, h, dtype=np.float32)[:, None], w, axis=1)
+    t = np.exp(-float(density) * depth)[..., None]
+    return np.clip(img.astype(np.float32) * t + FOG_AIRLIGHT * (1 - t) + 0.5, 0, 255).astype(np.uint8)
+
+
+def compare_composite(a, b, pos):
+    """Original on the left of the divider, dehazed on the right."""
+    h, w = a.shape[:2]
+    x = int(round(w * pos / 100))
+    out = b.copy()
+    out[:, :x] = a[:, :x]
+    if 0 < x < w:
+        out[:, max(0, x - 1):min(w, x + 1)] = (211, 47, 47)
+    return out
+
+
+def _lum(img):
+    return cv2.cvtColor(img, cv2.COLOR_RGB2GRAY).astype(np.float32)
+
+
+def quality_metrics(img):
+    """No-reference measures of how much structure an image shows."""
+    L = _lum(img)
+    hist = np.bincount(L.astype(np.uint8).ravel(), minlength=256).astype(np.float64)
+    p = hist / hist.sum()
+    p = p[p > 0]
+    mag = np.hypot(L[:-1, 1:] - L[:-1, :-1], L[1:, :-1] - L[:-1, :-1])
+    chans = [np.bincount(img[..., c].ravel(), minlength=256).astype(np.float64) for c in range(3)]
+    return {"contrast": float(L.std()), "entropy": float(-(p * np.log2(p)).sum()),
+            "gradient": float(mag.mean()), "edges": float(100.0 * (mag > 12).mean()),
+            "hist": hist, "chans": chans}
+
+
+def psnr(a, b):
+    mse = float(np.mean((a.astype(np.float32) - b.astype(np.float32)) ** 2))
+    return 99.0 if mse < 1e-6 else 10.0 * math.log10(255.0 ** 2 / mse)
+
+
+def ssim(a, b):
+    """Mean structural similarity on luminance (11x11 Gaussian window)."""
+    x, y = _lum(a), _lum(b)
+    c1, c2 = (0.01 * 255) ** 2, (0.03 * 255) ** 2
+
+    def g(z):
+        return cv2.GaussianBlur(z, (11, 11), 1.5)
+
+    mx, my = g(x), g(y)
+    sxx, syy, sxy = g(x * x) - mx * mx, g(y * y) - my * my, g(x * y) - mx * my
+    s = ((2 * mx * my + c1) * (2 * sxy + c2)) / ((mx * mx + my * my + c1) * (sxx + syy + c2))
+    return float(s.mean())
+
+
+def hist_svg(series, w=520, h=150, label="Histogram"):
+    """series: [(256-bin histogram, colour, dashed?)] drawn as overlaid lines."""
+    m = max(max(s[0].max() for s in series), 1.0)
+    lines = ""
+    for hh, colour, dashed in series:
+        pts = " ".join(f"{i * w / 255:.1f},{h - 4 - (v / m) * (h - 10):.1f}" for i, v in enumerate(hh))
+        lines += (f'<polyline fill="none" stroke="{colour}" stroke-width="2" '
+                  f'{"stroke-dasharray=\"6 4\" " if dashed else ""}points="{pts}"/>')
+    return (f'<svg viewBox="0 0 {w} {h}" width="100%" role="img" aria-label="{label}" '
+            f'style="background:#fafafa;border:1px solid rgba(0,0,0,.08);border-radius:.35rem">{lines}</svg>')
+
+
+TEST_DIR = APP_DIR / "assets" / "test images"
+
+
+@st.cache_data(show_spinner=False)
+def list_test_images():
+    """{label: (hazy_path, clear_reference_path_or_None)} for every photo in assets/test images."""
+    found = {}
+    for f in sorted(glob.glob(str(TEST_DIR / "**" / "*.jpg"), recursive=True)):
+        pth = Path(f)
+        if "clear_reference" in pth.name:
+            continue
+        ref = pth.with_name(pth.name.replace("_hazy", "_clear_reference"))
+        label = pth.stem.replace("_hazy", "").replace("_", " ").capitalize()
+        found[label + (" (clear reference)" if ref.exists() else "")] = (pth, ref if ref.exists() else None)
+    return found
+
+
+def _read_rgb(path, size=None):
+    with Image.open(path) as im:
+        arr = np.array(ImageOps.exif_transpose(im).convert("RGB"))
+    if size is not None:
+        return cv2.resize(arr, size, interpolation=cv2.INTER_AREA)
+    return resize_max(arr)
+
+
+_BASE = dict(dcp_omega=0.95, dcp_t0=0.15, dcp_patch=0, freq_cutoff=FREQ_CUTOFF, tone_gamma=1.0, tone_sat=1.0)
+PRESETS = {
+    "Balanced (default)": dict(hist_strength=55, freq_strength=55, smooth_strength=50, sharpen_strength=50, **_BASE),
+    "Light haze": dict(hist_strength=40, freq_strength=35, smooth_strength=40, sharpen_strength=40,
+                       **{**_BASE, "dcp_omega": 0.85, "dcp_t0": 0.25, "tone_sat": 1.05}),
+    "Dense fog": dict(hist_strength=65, freq_strength=60, smooth_strength=55, sharpen_strength=55,
+                      **{**_BASE, "dcp_t0": 0.12, "tone_gamma": 1.1, "tone_sat": 1.1}),
+    "Real foggy photo": dict(hist_strength=55, freq_strength=50, smooth_strength=45, sharpen_strength=45,
+                             **{**_BASE, "tone_sat": 1.1}),
+    "Maximum detail": dict(hist_strength=80, freq_strength=80, smooth_strength=35, sharpen_strength=75,
+                           **{**_BASE, "dcp_omega": 0.97, "dcp_t0": 0.10, "tone_gamma": 1.1, "tone_sat": 1.1}),
+}
+
+
+@st.cache_data(show_spinner=False, max_entries=6)
+def run_pipeline(img, hist, freq, smooth, sharpen, omega, t0, patch, use_dcp, gamma, sat, cutoff):
+    return dehaze_pipeline(img, hist, freq, smooth, sharpen, omega=omega, t0=t0, patch=patch,
+                           use_dcp=use_dcp, gamma=gamma, saturation=sat, cutoff=cutoff)
+
+
+def dehaze_steps(img, hist, freq, smooth, sharpen, omega, t0, patch, use_dcp, gamma, sat, cutoff):
+    """The image after every stage, in the order the stages actually run:
+    [(name, image, stage_is_active)]. Same maths as dehaze_pipeline."""
+    steps = [("Original", img, True)]
+    r = cached_dark_channel_prior(img, omega, t0, patch) if use_dcp else img
+    steps.append(("dcp", r, bool(use_dcp)))
+    r = adaptive_smoothing(r, smooth)
+    steps.append(("smooth", r, smooth > 0))
+    r = adaptive_sharpening(r, sharpen)
+    steps.append(("sharpen", r, sharpen > 0))
+    r, _ = histogram_stretch(r, hist, return_range=True)
+    steps.append(("hist", r, hist > 0))
+    r = frequency_enhancement(r, freq, cutoff)
+    steps.append(("freq", r, freq > 0))
+    r = tone_adjust(r, gamma, sat)
+    steps.append(("tone", r, gamma != 1.0 or sat != 1.0))
+    return steps
+
+
+@st.cache_data(show_spinner=False, max_entries=3)
+def run_stages(img, hist, freq, smooth, sharpen, omega, t0, patch, use_dcp, gamma, sat, cutoff):
+    return dehaze_steps(img, hist, freq, smooth, sharpen, omega, t0, patch, use_dcp, gamma, sat, cutoff)
 
 
 # ============================================================
@@ -928,27 +1139,58 @@ def inject_css():
 
 st.set_page_config(page_title="Urban Fog Cleaner", page_icon="🌫️", layout="wide")
 inject_css()
+st.markdown(
+    """
+    <style>
+    /* extra rows in the pipeline card + the measurements block, in the same style */
+    .st-key-stage_input, .st-key-stage_dcp, .st-key-stage_tone { gap: .15rem; margin-top: .9rem; }
+    .st-key-upload_card { --pv-maxh: max(12rem, calc(var(--ufc-card-h) - 12.5rem)); }
+    .st-key-pipeline_card [data-testid="stSelectbox"] label p,
+    .st-key-pipeline_card [data-testid="stToggle"] label p,
+    .st-key-pipeline_card [data-testid="stCheckbox"] label p { font-size: .95rem; }
+    .st-key-upload_card [data-testid="stSegmentedControl"] { margin-bottom: .2rem; }
+    .st-key-method_card { padding: 1.5rem 1.75rem; margin-top: 1.2rem; }
+    table.ufc-m { width: 100%; border-collapse: collapse; }
+    table.ufc-m th, table.ufc-m td { text-align: right; padding: .4rem .3rem; border-bottom: 1px solid rgba(0,0,0,.08); }
+    table.ufc-m th { font-weight: 600; font-size: .85rem; color: #777; }
+    table.ufc-m th:first-child, table.ufc-m td:first-child { text-align: left; }
+    [data-testid="stAppViewContainer"] table.ufc-m td:not(:first-child) { font-family: 'IBM Plex Mono', monospace; font-size: .9rem; }
+    table.ufc-m td b { color: #d32f2f; font-weight: 600; }
+    .ufc-cap { font-size: .85rem; color: #777; margin: 0 0 .4rem; }
+    .ufc-eq { font-family: 'IBM Plex Mono', monospace; font-size: 1.05rem; }
+    /* Method card: both columns start on the same line, same line height, indented paragraphs,
+       hanging indent on the references */
+    .st-key-method_card [data-testid="stMarkdownContainer"] p { margin: 0 0 .8rem; line-height: 1.65;
+        text-align: justify; hyphens: auto; text-indent: 1.6rem; }
+    .st-key-method_card [data-testid="stMarkdownContainer"] p.ufc-sub { text-indent: 0; text-align: left;
+        font-weight: 600; font-size: 1.05rem; margin: .2rem 0 .7rem; }
+    .st-key-method_card [data-testid="stMarkdownContainer"] p.ufc-eq { text-indent: 0; text-align: left; margin-bottom: 1rem; }
+    .st-key-method_card [data-testid="stMarkdownContainer"] ol { margin: 0; padding-left: 1.9rem; }
+    .st-key-method_card [data-testid="stMarkdownContainer"] ol li { margin: 0 0 .7rem; padding-left: .5rem;
+        line-height: 1.65; text-align: left; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 render_title()
 render_header()
 
-if "source_key" not in st.session_state:
-    st.session_state.source_key = None
-if "source_img" not in st.session_state:
-    st.session_state.source_img = None
+SAMPLE_LABEL, PLACEHOLDER = "Sample scene (synthetic city)", "Choose a source…"
+VIEWS = ["Side by side", "Slider", "Original", "Dehazed", "Stages"]
+STAGE_LABELS = ["01 Dark Channel", "04 Smoothing", "05 Sharpening", "02 Histogram", "03 Frequency", "06 Tone"]  # run order
 
-st.session_state.setdefault("hist_strength", 55)
-st.session_state.setdefault("freq_strength", 55)
-st.session_state.setdefault("smooth_strength", 50)
-st.session_state.setdefault("sharpen_strength", 50)
-st.session_state.setdefault("upload_round", 0)     # bumped to hand the user a fresh, empty uploader
-st.session_state.setdefault("upload_error", None)  # why the last file couldn't be opened
+for _k, _v in {"source_key": None, "source_img": None, "source_depth": None, "reference": None,
+               "pre_foggy": True, "fog_density": 1.6, "upload_round": 0, "upload_error": None,
+               "use_dcp": True, "source_choice": PLACEHOLDER, "preset_choice": "Balanced (default)",
+               **PRESETS["Balanced (default)"]}.items():
+    st.session_state.setdefault(_k, _v)
 
 
 def _apply_auto_enhance():
-    st.session_state.hist_strength = 55
-    st.session_state.freq_strength = 55
-    st.session_state.smooth_strength = 50
-    st.session_state.sharpen_strength = 50
+    for k, v in PRESETS["Balanced (default)"].items():
+        st.session_state[k] = v
+    st.session_state.use_dcp = True
+    st.session_state.preset_choice = "Balanced (default)"
 
 
 def _apply_reset():
@@ -956,10 +1198,34 @@ def _apply_reset():
     st.session_state.freq_strength = 0
     st.session_state.smooth_strength = 0
     st.session_state.sharpen_strength = 0
+    st.session_state.tone_gamma = 1.0
+    st.session_state.tone_sat = 1.0
+
+
+def _apply_preset():
+    for k, v in PRESETS[st.session_state.preset_choice].items():
+        st.session_state[k] = v
+
+
+def _choose_source():
+    choice = st.session_state.source_choice
+    if choice == PLACEHOLDER:
+        return
+    if choice == SAMPLE_LABEL:
+        img, depth = make_sample_scene()
+        st.session_state.update(source_img=img, source_key="sample", source_depth=depth,
+                                reference=("sample", img), pre_foggy=False)
+        return
+    path, ref = list_test_images()[choice]
+    img, key = _read_rgb(path), f"test:{choice}"
+    st.session_state.update(
+        source_img=img, source_key=key, source_depth=None, pre_foggy=True,
+        reference=(key, _read_rgb(ref, (img.shape[1], img.shape[0]))) if ref else None)
 
 
 has_image = st.session_state.source_img is not None
 pipe_info = None  # filled in by the Preview card once a photo is loaded
+hazy = result = None
 
 # Both cards live inside a narrower, centered strip rather than stretching
 # across the whole wide-mode page — full-width made them read as short,
@@ -968,7 +1234,7 @@ _, center_col, _ = st.columns(PAGE_SPLIT, gap="large")
 left_col, right_col = center_col.columns(CARD_SPLIT, gap="medium")
 
 # ------------------------------------------------------------
-# LEFT CARD — upload / preview
+# LEFT CARD — upload / preview / measurements
 # ------------------------------------------------------------
 with left_col:
     with st.container(border=True, key="upload_card"):
@@ -992,21 +1258,20 @@ with left_col:
                     st.session_state.upload_error = None
                     st.session_state.source_img = photo
                     st.session_state.source_key = f"{uploaded_file.name}-{uploaded_file.size}"
+                    st.session_state.source_depth = None
+                    st.session_state.reference = None
+                    st.session_state.pre_foggy = True
+                    st.session_state.source_choice = PLACEHOLDER
                 st.rerun()
             if st.session_state.upload_error:
                 st.error(st.session_state.upload_error)
         else:
-            # The photo's shape drives the size of the preview pair (see the
-            # "preview images" CSS). It travels as a CSS variable in a <style>
-            # tag that rides along with the heading, so it adds no element
-            # (and no gap) of its own.
-            src_h, src_w = st.session_state.source_img.shape[:2]
-            # Only for a sliver of a picture (taller than 5:1, e.g. a long scroll
-            # screenshot): its columns would get too narrow for the captions to
-            # stay on one line, and can't go below 1rem at all, which would
-            # stretch the picture far past the card. So give the pair a minimum
-            # width and cap the picture's height (it is then centred in its
-            # column). Normal photos get no extra rule at all.
+            raw = st.session_state.source_img
+            hazy = raw if st.session_state.pre_foggy else simulate_fog(
+                raw, st.session_state.source_depth, st.session_state.fog_density)
+            src_h, src_w = hazy.shape[:2]
+            view = st.session_state.get("view_mode") or "Side by side"
+            # Only for a sliver of a picture (taller than 5:1): see the preview CSS.
             sliver_cap = (
                 '.st-key-preview_images { width: min(100%, max('
                 'calc(2 * var(--pv-maxh) * var(--pv-ar) + 1rem), 9rem)) !important; }'
@@ -1014,10 +1279,19 @@ with left_col:
                 '{ max-height: var(--pv-maxh); object-fit: contain; }'
                 if src_w / src_h < 0.2 else ""
             )
+            single_cap = (
+                '.st-key-preview_images { width: min(100%, calc(var(--pv-maxh) * var(--pv-ar, 1.25))) !important; }'
+                if view not in ("Side by side", "Stages") else ""
+            )
             top_l, top_r = st.columns([3, 1])
             with top_l:
                 st.markdown(
-                    f'<style>.st-key-preview_images {{ --pv-ar: {src_w / src_h:.4f}; }}{sliver_cap}</style>'
+                    f'<style>.st-key-preview_images {{ --pv-ar: {src_w / src_h:.4f}; }}{sliver_cap}{single_cap}</style>'
+                    '<style>.st-key-upload_card { min-height: 0 !important; }'
+                    '[data-testid="stLayoutWrapper"]:has(> .st-key-upload_card) '
+                    '{ flex: 0 0 auto !important; align-self: flex-start; width: 100%; position: sticky; top: 1rem; }'
+                    '[data-testid="stLayoutWrapper"]:has(> .st-key-preview_images) '
+                    '{ margin-top: 0 !important; margin-bottom: 0 !important; }</style>'
                     '<div class="card-heading">Preview</div>',
                     unsafe_allow_html=True,
                 )
@@ -1025,23 +1299,96 @@ with left_col:
                 if st.button("Change Image", width="stretch"):
                     st.session_state.source_img = None
                     st.session_state.source_key = None
+                    st.session_state.source_choice = PLACEHOLDER
                     st.rerun()
 
+            st.segmented_control("View", VIEWS, default="Side by side", key="view_mode",
+                                 label_visibility="collapsed")
+            if view == "Slider":
+                st.slider("Compare position", 0, 100, 50, key="compare_pos", label_visibility="collapsed")
+            elif view == "Stages":
+                st.pills("Stage", STAGE_LABELS, default=STAGE_LABELS[0], key="stage_pick",
+                         label_visibility="collapsed")
+                st.caption("Stages in the order they run: each pair shows the image before and after that stage.")
+
             with st.spinner("Processing…"):
-                result, pipe_info = dehaze_pipeline(
-                    st.session_state.source_img,
-                    hist_strength=st.session_state.hist_strength,
-                    freq_strength=st.session_state.freq_strength,
-                    smooth_strength=st.session_state.smooth_strength,
-                    sharpen_strength=st.session_state.sharpen_strength,
+                result, pipe_info = run_pipeline(
+                    hazy,
+                    st.session_state.hist_strength,
+                    st.session_state.freq_strength,
+                    st.session_state.smooth_strength,
+                    st.session_state.sharpen_strength,
+                    st.session_state.dcp_omega,
+                    st.session_state.dcp_t0,
+                    st.session_state.dcp_patch,
+                    st.session_state.use_dcp,
+                    st.session_state.tone_gamma,
+                    st.session_state.tone_sat,
+                    st.session_state.freq_cutoff,
                 )
 
             with st.container(key="preview_images"):
-                col_before, col_after = st.columns(2)
-                with col_before:
-                    st.image(st.session_state.source_img, caption="Original", width="stretch")
-                with col_after:
+                if view == "Side by side":
+                    col_before, col_after = st.columns(2)
+                    with col_before:
+                        st.image(hazy, caption="Original", width="stretch")
+                    with col_after:
+                        st.image(result, caption="Dehazed", width="stretch")
+                elif view == "Slider":
+                    pos = st.session_state.get("compare_pos", 50)
+                    st.image(compare_composite(hazy, result, pos),
+                             caption=f"Original (left) · Dehazed (right) · divider at {pos}%", width="stretch")
+                elif view == "Stages":
+                    pick = st.session_state.get("stage_pick") or STAGE_LABELS[0]
+                    idx = STAGE_LABELS.index(pick)
+                    steps = run_stages(
+                        hazy, st.session_state.hist_strength, st.session_state.freq_strength,
+                        st.session_state.smooth_strength, st.session_state.sharpen_strength,
+                        st.session_state.dcp_omega, st.session_state.dcp_t0, st.session_state.dcp_patch,
+                        st.session_state.use_dcp, st.session_state.tone_gamma, st.session_state.tone_sat,
+                        st.session_state.freq_cutoff)
+                    col_b, col_a = st.columns(2)
+                    with col_b:
+                        st.image(steps[idx][1], caption="Original" if idx == 0 else f"After the stage before {pick}",
+                                 width="stretch")
+                    with col_a:
+                        st.image(steps[idx + 1][1], width="stretch",
+                                 caption=f"After {pick}" if steps[idx + 1][2] else f"{pick} is off, so nothing changes")
+                elif view == "Original":
+                    st.image(hazy, caption="Original", width="stretch")
+                else:
                     st.image(result, caption="Dehazed", width="stretch")
+
+            # ---------------- measurements and histogram comparison, below the images ----------------
+            st.markdown('<div class="card-heading" style="font-size:1.5rem;margin-top:1.4rem">Measurements</div>',
+                        unsafe_allow_html=True)
+            m0, m1 = quality_metrics(hazy), quality_metrics(result)
+            ref_pack = st.session_state.reference
+            ref = ref_pack[1] if ref_pack and ref_pack[0] == st.session_state.source_key else None
+
+            def _row(name, a, b, d):
+                return f"<tr><td>{name}</td><td>{a:.{d}f}</td><td><b>{b:.{d}f}</b></td></tr>"
+
+            rows = (_row("Contrast (std. dev.)", m0["contrast"], m1["contrast"], 1)
+                    + _row("Entropy (bits)", m0["entropy"], m1["entropy"], 2)
+                    + _row("Mean gradient", m0["gradient"], m1["gradient"], 2)
+                    + _row("Edge pixels (%)", m0["edges"], m1["edges"], 1))
+            if ref is not None:
+                rows += (_row("PSNR vs. clear (dB)", psnr(hazy, ref), psnr(result, ref), 1)
+                         + _row("SSIM vs. clear", ssim(hazy, ref), ssim(result, ref), 3))
+            c_tab, c_h1, c_h2 = st.columns([1.15, 1, 1], gap="medium")
+            c_tab.markdown(f'<table class="ufc-m"><tr><th></th><th>Original</th><th>Dehazed</th></tr>{rows}</table>',
+                           unsafe_allow_html=True)
+            c_h1.markdown(
+                '<p class="ufc-cap">Brightness histogram: original (grey), dehazed (red)</p>'
+                + hist_svg([(m0["hist"], "#9a9a9a", False), (m1["hist"], "#d32f2f", False)], label="Brightness histograms"),
+                unsafe_allow_html=True)
+            chan = ["#e53935", "#43a047", "#1e88e5"]
+            c_h2.markdown(
+                '<p class="ufc-cap">R, G, B histograms: original (dashed), dehazed (solid)</p>'
+                + hist_svg([(m0["chans"][c], chan[c], True) for c in range(3)]
+                           + [(m1["chans"][c], chan[c], False) for c in range(3)], label="Colour channel histograms"),
+                unsafe_allow_html=True)
 
 
 # ------------------------------------------------------------
@@ -1055,87 +1402,123 @@ def _stage_row(num, label, value):
     )
 
 
+def _param_row(label, value):
+    return (
+        '<div class="stage-row" style="margin-top:.45rem"><span class="stage-label" '
+        f'style="font-weight:500;font-size:.95rem">{label}</span>'
+        f'<span class="stage-value" style="font-size:.95rem">{value}</span></div>'
+    )
+
+
 with right_col:
     with st.container(border=True, key="pipeline_card"):
         st.markdown('<div class="pipeline-heading">Enhancement Pipeline</div>', unsafe_allow_html=True)
 
-        # Stage 01 — Histogram Stretch
+        # Input — where the photo comes from, and (optionally) simulated fog on it
+        with st.container(key="stage_input"):
+            foggy = st.session_state.pre_foggy
+            st.markdown(_stage_row("00", "Input", "photo as is" if foggy else f"β {st.session_state.fog_density:.2f}"),
+                        unsafe_allow_html=True)
+            st.checkbox("Photo is already foggy (skip the fog simulation)", key="pre_foggy")
+            st.markdown(_param_row("Simulated fog density", f"{st.session_state.fog_density:.2f}"),
+                        unsafe_allow_html=True)
+            st.slider("Fog density", 0.0, 4.0, step=0.05, key="fog_density",
+                      disabled=st.session_state.pre_foggy, label_visibility="collapsed")
+
+        # Stage 01 — Dark Channel Prior
+        with st.container(key="stage_dcp"):
+            st.markdown(_stage_row("01", "Dark Channel Prior", "On" if st.session_state.use_dcp else "Off"),
+                        unsafe_allow_html=True)
+            st.toggle("Remove fog before the other stages", key="use_dcp")
+            st.markdown(_param_row("Haze removed (ω)", f"{st.session_state.dcp_omega:.2f}"), unsafe_allow_html=True)
+            st.slider("Haze removed", 0.50, 1.00, step=0.01, key="dcp_omega", label_visibility="collapsed")
+            st.markdown(_param_row("Minimum transmission (t₀)", f"{st.session_state.dcp_t0:.2f}"), unsafe_allow_html=True)
+            st.slider("Minimum transmission", 0.05, 0.50, step=0.01, key="dcp_t0", label_visibility="collapsed")
+            patch = st.session_state.dcp_patch
+            st.markdown(_param_row("Patch size", "auto" if patch == 0 else f"{patch}px"), unsafe_allow_html=True)
+            st.slider("Patch size", 0, 61, step=1, key="dcp_patch", label_visibility="collapsed")
+
+        # Stage 02 — Histogram Stretch
         with st.container(key="stage_hist"):
-            st.markdown(_stage_row("01", "Histogram Stretch", st.session_state.hist_strength),
-                        unsafe_allow_html=True)
-            hist_strength = st.slider("Histogram strength", 0, 100, key="hist_strength",
-                                       label_visibility="collapsed")
-            percent = hist_clip_percent(hist_strength)
-            if has_image and pipe_info:
-                lo, hi = pipe_info["hist_range"]   # measured on this stage's own input
-                range_txt = f"{int(lo)}&ndash;{int(hi)}"
-            else:
-                range_txt = "n/a"
-            st.markdown(
-                f'<p class="stage-readout">Clip {percent:.1f}% &middot; Range {range_txt}</p>',
-                unsafe_allow_html=True,
-            )
+            st.markdown(_stage_row("02", "Histogram Stretch", st.session_state.hist_strength), unsafe_allow_html=True)
+            hist_strength = st.slider("Histogram strength", 0, 100, key="hist_strength", label_visibility="collapsed")
 
-        # Stage 02 — Frequency-Domain Filter
+        # Stage 03 — Frequency-Domain Filter
         with st.container(key="stage_freq"):
-            st.markdown(_stage_row("02", "Frequency-Domain Filter", st.session_state.freq_strength),
+            st.markdown(_stage_row("03", "Frequency-Domain Filter", st.session_state.freq_strength),
                         unsafe_allow_html=True)
-            freq_strength = st.slider("Frequency strength", 0, 100, key="freq_strength",
-                                       label_visibility="collapsed")
-            boost = freq_gain(freq_strength)
-            cutoff_txt = f"{FREQ_CUTOFF}px" if has_image else "n/a"
-            st.markdown(
-                f'<p class="stage-readout">Boost &times;{boost:.2f} &middot; Cutoff {cutoff_txt}</p>',
-                unsafe_allow_html=True,
-            )
+            freq_strength = st.slider("Frequency strength", 0, 100, key="freq_strength", label_visibility="collapsed")
+            st.markdown(_param_row("Cutoff radius", f"{st.session_state.freq_cutoff}px"), unsafe_allow_html=True)
+            st.slider("Cutoff radius", 5, 80, key="freq_cutoff", label_visibility="collapsed")
 
-        # Stage 03 — Adaptive Smoothing
+        # Stage 04 — Adaptive Smoothing
         with st.container(key="stage_smooth"):
-            st.markdown(_stage_row("03", "Adaptive Smoothing", st.session_state.smooth_strength),
+            st.markdown(_stage_row("04", "Adaptive Smoothing", st.session_state.smooth_strength),
                         unsafe_allow_html=True)
-            smooth_strength = st.slider("Smoothing strength", 0, 100, key="smooth_strength",
-                                         label_visibility="collapsed")
-            tolerance_txt = f"{smoothing_tolerance(smooth_strength):.0f}" if smooth_strength > 0 else "off"
-            st.markdown(
-                f'<p class="stage-readout">Edge tolerance {tolerance_txt}</p>',
-                unsafe_allow_html=True,
-            )
+            smooth_strength = st.slider("Smoothing strength", 0, 100, key="smooth_strength", label_visibility="collapsed")
 
-        # Stage 04 — Adaptive Sharpening
+        # Stage 05 — Adaptive Sharpening
         with st.container(key="stage_sharpen"):
-            st.markdown(_stage_row("04", "Adaptive Sharpening", st.session_state.sharpen_strength),
+            st.markdown(_stage_row("05", "Adaptive Sharpening", st.session_state.sharpen_strength),
                         unsafe_allow_html=True)
             sharpen_strength = st.slider("Sharpening strength", 0, 100, key="sharpen_strength",
-                                          label_visibility="collapsed")
-            amount = edge_gain(sharpen_strength)
-            st.markdown(
-                f'<p class="stage-readout">Edge gain &times;{amount:.2f}</p>',
-                unsafe_allow_html=True,
-            )
+                                         label_visibility="collapsed")
+
+        # Stage 06 — Final Tone
+        with st.container(key="stage_tone"):
+            st.markdown(_stage_row("06", "Final Tone", "gamma · saturation"), unsafe_allow_html=True)
+            st.markdown(_param_row("Gamma", f"{st.session_state.tone_gamma:.2f}"), unsafe_allow_html=True)
+            st.slider("Gamma", 0.60, 1.60, step=0.05, key="tone_gamma", label_visibility="collapsed")
+            st.markdown(_param_row("Saturation", f"{st.session_state.tone_sat:.2f}"), unsafe_allow_html=True)
+            st.slider("Saturation", 0.50, 2.00, step=0.05, key="tone_sat", label_visibility="collapsed")
 
         with st.container(key="pipeline_actions"):
+            st.selectbox("Preset", list(PRESETS), key="preset_choice", on_change=_apply_preset)
             b1, b2 = st.columns(2)
             with b1:
                 st.button("Auto-Enhance", width="stretch", on_click=_apply_auto_enhance)
             with b2:
                 st.button("Reset", width="stretch", on_click=_apply_reset)
 
-            if has_image:
-                st.download_button(
-                    "Download Result",
-                    data=to_png_bytes(result),
-                    file_name="dehazed_result.png",
-                    mime="image/png",
-                    type="primary",
-                    width="stretch",
-                )
+            if has_image and result is not None:
+                st.download_button("Download Result", data=to_png_bytes(result), file_name="dehazed_result.png",
+                                   mime="image/png", type="primary", width="stretch")
             else:
-                st.download_button(
-                    "Download Result",
-                    data=b"",
-                    file_name="dehazed_result.png",
-                    mime="image/png",
-                    type="primary",
-                    width="stretch",
-                    disabled=True,
-                )
+                st.download_button("Download Result", data=b"", file_name="dehazed_result.png",
+                                   mime="image/png", type="primary", width="stretch", disabled=True)
+
+
+# ------------------------------------------------------------
+# BELOW THE CARDS — method and references
+# ------------------------------------------------------------
+_, lower_col, _ = st.columns(PAGE_SPLIT, gap="large")
+with lower_col:
+    with st.container(border=True, key="method_card"):
+        st.markdown('<div class="card-heading">Method</div>', unsafe_allow_html=True)
+        st.markdown('<p class="ufc-eq">I = J·t + A·(1 − t),&nbsp; t = e<sup>−βd</sup></p>', unsafe_allow_html=True)
+        m_l, m_r = st.columns(2, gap="large")
+        m_l.markdown('<p class="ufc-sub">Approach</p>', unsafe_allow_html=True)
+        m_l.markdown(
+            "Fog follows the atmospheric scattering model: *I* is the observed image, *J* the clear "
+            "scene, *A* the airlight and *t* the transmission at depth *d* (Koschmieder, 1924; "
+            "Narasimhan and Nayar, 2002). The dark channel prior estimates *A* from the haziest pixels "
+            "and *t* from local colour minima, refines *t* with a guided filter, then solves for *J* "
+            "(He et al.). Smoothing, sharpening, histogram stretch and a Gaussian high-frequency-emphasis "
+            "filter in the Fourier domain then work on luminance only."
+        )
+        m_l.markdown(
+            "For simulated fog on photos, depth is assumed to grow toward the top of the frame. "
+            "The measurements compare the original and the dehazed image without a reference: contrast, "
+            "entropy and gradient rise when structure becomes visible, but they also rise when an image "
+            "is over-sharpened, so judge them together with the picture itself."
+        )
+        m_r.markdown('<p class="ufc-sub">References</p>', unsafe_allow_html=True)
+        m_r.markdown(
+            "1. He, K., Sun, J. and Tang, X. (2011). Single image haze removal using dark channel prior. "
+            "*IEEE TPAMI*, 33(12), 2341–2353.\n"
+            "2. He, K., Sun, J. and Tang, X. (2013). Guided image filtering. *IEEE TPAMI*, 35(6), 1397–1409.\n"
+            "3. Narasimhan, S. G. and Nayar, S. K. (2002). Vision and the atmosphere. *IJCV*, 48(3), 233–254.\n"
+            "4. Koschmieder, H. (1924). Theorie der horizontalen Sichtweite. *Beitr. Phys. freien Atm.*, 12, 33–53.\n"
+            "5. Gonzalez, R. C. and Woods, R. E. (2018). *Digital Image Processing*, 4th ed. Pearson.\n"
+            "6. Tomasi, C. and Manduchi, R. (1998). Bilateral filtering for gray and color images. *Proc. ICCV*, 839–846."
+        )

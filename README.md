@@ -27,6 +27,24 @@ Fog removal runs first using the **Dark Channel Prior**, then three tunable enha
 
 **Where this helps:** traffic monitoring, construction inspection, and any scene where poor visibility hides structure.
 
+## What is in the app
+
+Everything is on the main page (no sidebar).
+
+**Preview card** (left)
+- Upload a photo, or use **Change Image** to start over.
+- **View** switch: Side by side, Slider (drag the divider between original and dehazed), Original, Dehazed, and **Stages**, which steps through the pipeline in the order it runs (Dark Channel, Smoothing, Sharpening, Histogram, Frequency, Tone) and shows the image before and after the stage you pick.
+- **Measurements**, below the images: contrast, entropy, mean gradient and edge pixels for the original and the dehazed image, plus PSNR and SSIM when a clear reference exists. Two histogram charts compare them: brightness (grey vs red) and R, G, B (dashed vs solid).
+
+**Enhancement Pipeline card** (right)
+- **00 Input** — tick *Photo is already foggy* for real fog, or leave it off and set the simulated fog density (I = J·t + A·(1 − t)).
+- **01 Dark Channel Prior** — on/off, haze removed (ω), minimum transmission (t₀), patch size.
+- **02 Histogram Stretch**, **03 Frequency-Domain Filter** (strength and cutoff radius), **04 Adaptive Smoothing**, **05 Adaptive Sharpening** — a strength of 0 switches a stage off.
+- **06 Final Tone** — gamma and saturation (defaults leave the image untouched).
+- **Preset**, **Auto-Enhance**, **Reset** and **Download Result**.
+
+The **Method** card at the bottom gives the fog model and references. PSNR and SSIM appear whenever a clear reference photo is available.
+
 ## Live demo
 
 👉 **https://dehazeapp.streamlit.app/**
