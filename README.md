@@ -1,6 +1,6 @@
 <div align="center">
 
-# Urban Fog Cleaner ( Dehaze App )
+# Dehaze App
 
 **Upload a foggy city photo, tune a seven-stage enhancement pipeline, check the result with measurements and histograms, and download it.**
 
@@ -15,13 +15,13 @@
 
 ## 📷 Main View
 
-![Urban Fog Cleaner preview](assets/Preview/preview.gif)
+![Dehaze App preview](assets/Preview/preview.gif)
 
 ---
 
 ## Overview
 
-**Urban Fog Cleaner** is a Streamlit web app that restores visibility in foggy and hazy urban photos (buildings, roads, vehicles). It was built as a Digital Image Processing course project.
+**Dehaze App** is a Streamlit web app that restores visibility in foggy and hazy urban photos (buildings, roads, vehicles). It was built as a Digital Image Processing course project.
 
 Fog removal runs first using the **Dark Channel Prior**, an optional **Wiener deblur** undoes camera blur, then adaptive smoothing, adaptive sharpening, histogram stretching and a frequency-domain filter refine the result, and an optional gamma and saturation step finishes it. A **Course modules only** switch runs just the three project modules (frequency-domain enhancement, histogram stretching, adaptive smoothing and sharpening) so their effect can be shown on its own. The original and dehazed images can be compared side by side, with a draggable divider, or one stage at a time, and the app measures the difference with contrast, entropy and gradient figures plus histogram charts.
 
