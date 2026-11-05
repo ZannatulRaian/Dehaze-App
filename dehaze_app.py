@@ -205,18 +205,59 @@ def tone_adjust(img, gamma=1.0, saturation=1.0):
     return np.clip(f * 255.0 + 0.5, 0, 255).astype(np.uint8)
 
 
-def dehaze_pipeline(img, hist_strength=55, freq_strength=55, smooth_strength=50, sharpen_strength=50,
-                    omega=0.95, t0=0.15, patch=0, use_dcp=True, gamma=1.0, saturation=1.0,
-                    cutoff=FREQ_CUTOFF):
-    """Returns (result, info). info["hist_range"] is the luminance range the
-    histogram stage actually stretched, for the slider's readout."""
-    result = cached_dark_channel_prior(img, omega, t0, patch) if use_dcp else img   # STEP 1 — fog removal
-    result = adaptive_smoothing(result, smooth_strength)         # STEP 2
-    result = adaptive_sharpening(result, sharpen_strength)       # STEP 3
-    result, hist_range = histogram_stretch(result, hist_strength, return_range=True)  # STEP 4
-    result = frequency_enhancement(result, freq_strength, cutoff)      # STEP 5
-    result = tone_adjust(result, gamma, saturation)            # final tone (optional)
-    return result, {"hist_range": hist_range}
+STAGE_ORDER = ["dcp", "deblur", "smooth", "sharpen", "hist", "freq", "tone"]   # the order they run
+
+
+def wiener_deblur(img, amount, kind="Gaussian", k=0.01):
+    """Wiener deconvolution of luminance in the Fourier domain, for an assumed Gaussian blur
+    (std = amount px) or horizontal motion blur (length = 3 x amount px). k damps noise."""
+    if amount <= 0:
+        return img
+    ycc = cv2.cvtColor(img, cv2.COLOR_RGB2YCrCb)
+    y = ycc[..., 0].astype(np.float32) / 255.0
+    pad = int(4 * amount) + 8
+    yp = cv2.copyMakeBorder(y, pad, pad, pad, pad, cv2.BORDER_REFLECT_101)
+    fy = np.fft.fftfreq(yp.shape[0])[:, None]
+    fx = np.fft.fftfreq(yp.shape[1])[None, :]
+    if kind == "Motion":
+        n = max(3, int(round(3 * amount)) | 1)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            h1 = np.where(fx == 0, 1.0, np.sin(np.pi * n * fx) / (n * np.sin(np.pi * fx)))
+        H = np.broadcast_to(h1, yp.shape)
+    else:
+        H = np.exp(-2.0 * np.pi ** 2 * amount ** 2 * (fx ** 2 + fy ** 2))
+    X = np.fft.fft2(yp) * H / (H * H + k)
+    x = np.real(np.fft.ifft2(X))[pad:-pad, pad:-pad]
+    ycc[..., 0] = np.clip(x * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(ycc, cv2.COLOR_YCrCb2RGB)
+
+
+def apply_stage(name, img, P):
+    if name == "dcp":
+        return cached_dark_channel_prior(img, P["omega"], P["t0"], P["patch"]) if P["use_dcp"] else img
+    if name == "deblur":
+        return wiener_deblur(img, P["deblur"], P["deblur_kind"], P["deblur_k"])
+    if name == "smooth":
+        return adaptive_smoothing(img, P["smooth"])
+    if name == "sharpen":
+        return adaptive_sharpening(img, P["sharpen"])
+    if name == "hist":
+        return histogram_stretch(img, P["hist"])
+    if name == "freq":
+        return frequency_enhancement(img, P["freq"], P["cutoff"])
+    return tone_adjust(img, P["gamma"], P["sat"])
+
+
+def stage_active(name, P):
+    return {"dcp": P["use_dcp"], "deblur": P["deblur"] > 0, "smooth": P["smooth"] > 0,
+            "sharpen": P["sharpen"] > 0, "hist": P["hist"] > 0, "freq": P["freq"] > 0,
+            "tone": P["gamma"] != 1.0 or P["sat"] != 1.0}[name]
+
+
+def dehaze_pipeline(img, P):
+    for name in STAGE_ORDER:
+        img = apply_stage(name, img, P)
+    return img
 
 
 # ============================================================
@@ -284,6 +325,29 @@ def simulate_fog(img, depth, density):
         depth = np.repeat(np.linspace(0.95, 0.15, h, dtype=np.float32)[:, None], w, axis=1)
     t = np.exp(-float(density) * depth)[..., None]
     return np.clip(img.astype(np.float32) * t + FOG_AIRLIGHT * (1 - t) + 0.5, 0, 255).astype(np.uint8)
+
+
+@st.cache_data(show_spinner=False)
+def simulate_blur(img, amount, kind):
+    """Camera blur: Gaussian, or horizontal motion (length = 3 x amount px)."""
+    if amount <= 0:
+        return img
+    if kind == "Motion":
+        n = max(3, int(round(3 * amount)) | 1)
+        kern = np.zeros((n, n), np.float32)
+        kern[n // 2, :] = 1.0 / n
+        return cv2.filter2D(img, -1, kern, borderType=cv2.BORDER_REFLECT_101)
+    return cv2.GaussianBlur(img, (0, 0), float(amount))
+
+
+def edge_maps(a, b):
+    """Sobel gradient magnitude of both images on one shared scale."""
+    def mag(img):
+        L = _lum(img)
+        return np.hypot(cv2.Sobel(L, cv2.CV_32F, 1, 0, ksize=3), cv2.Sobel(L, cv2.CV_32F, 0, 1, ksize=3))
+    ma, mb = mag(a), mag(b)
+    top = max(float(np.percentile(np.concatenate([ma.ravel(), mb.ravel()]), 99.5)), 1e-6)
+    return [np.clip(m / top * 255.0, 0, 255).astype(np.uint8) for m in (ma, mb)]
 
 
 def compare_composite(a, b, pos):
@@ -370,7 +434,8 @@ def _read_rgb(path, size=None):
     return resize_max(arr)
 
 
-_BASE = dict(dcp_omega=0.95, dcp_t0=0.15, dcp_patch=0, freq_cutoff=FREQ_CUTOFF, tone_gamma=1.0, tone_sat=1.0)
+_BASE = dict(dcp_omega=0.95, dcp_t0=0.15, dcp_patch=0, freq_cutoff=FREQ_CUTOFF, tone_gamma=1.0, tone_sat=1.0,
+             deblur_amount=0.0, deblur_kind="Gaussian", deblur_k=0.01)
 PRESETS = {
     "Balanced (default)": dict(hist_strength=55, freq_strength=55, smooth_strength=50, sharpen_strength=50, **_BASE),
     "Light haze": dict(hist_strength=40, freq_strength=35, smooth_strength=40, sharpen_strength=40,
@@ -385,33 +450,18 @@ PRESETS = {
 
 
 @st.cache_data(show_spinner=False, max_entries=6)
-def run_pipeline(img, hist, freq, smooth, sharpen, omega, t0, patch, use_dcp, gamma, sat, cutoff):
-    return dehaze_pipeline(img, hist, freq, smooth, sharpen, omega=omega, t0=t0, patch=patch,
-                           use_dcp=use_dcp, gamma=gamma, saturation=sat, cutoff=cutoff)
-
-
-def dehaze_steps(img, hist, freq, smooth, sharpen, omega, t0, patch, use_dcp, gamma, sat, cutoff):
-    """The image after every stage, in the order the stages actually run:
-    [(name, image, stage_is_active)]. Same maths as dehaze_pipeline."""
-    steps = [("Original", img, True)]
-    r = cached_dark_channel_prior(img, omega, t0, patch) if use_dcp else img
-    steps.append(("dcp", r, bool(use_dcp)))
-    r = adaptive_smoothing(r, smooth)
-    steps.append(("smooth", r, smooth > 0))
-    r = adaptive_sharpening(r, sharpen)
-    steps.append(("sharpen", r, sharpen > 0))
-    r, _ = histogram_stretch(r, hist, return_range=True)
-    steps.append(("hist", r, hist > 0))
-    r = frequency_enhancement(r, freq, cutoff)
-    steps.append(("freq", r, freq > 0))
-    r = tone_adjust(r, gamma, sat)
-    steps.append(("tone", r, gamma != 1.0 or sat != 1.0))
-    return steps
+def run_pipeline(img, P):
+    return dehaze_pipeline(img, P)
 
 
 @st.cache_data(show_spinner=False, max_entries=3)
-def run_stages(img, hist, freq, smooth, sharpen, omega, t0, patch, use_dcp, gamma, sat, cutoff):
-    return dehaze_steps(img, hist, freq, smooth, sharpen, omega, t0, patch, use_dcp, gamma, sat, cutoff)
+def run_stages(img, P):
+    """The image after every stage, cumulatively: [(name, image, stage_is_active)]."""
+    steps, r = [("Original", img, True)], img
+    for name in STAGE_ORDER:
+        r = apply_stage(name, r, P)
+        steps.append((name, r, stage_active(name, P)))
+    return steps
 
 
 # ============================================================
@@ -1143,7 +1193,7 @@ st.markdown(
     """
     <style>
     /* extra rows in the pipeline card + the measurements block, in the same style */
-    .st-key-stage_input, .st-key-stage_dcp, .st-key-stage_tone { gap: .15rem; margin-top: .9rem; }
+    .st-key-stage_input, .st-key-stage_dcp, .st-key-stage_deblur, .st-key-stage_tone { gap: .15rem; margin-top: .9rem; }
     .st-key-upload_card { --pv-maxh: max(12rem, calc(var(--ufc-card-h) - 12.5rem)); }
     .st-key-pipeline_card [data-testid="stSelectbox"] label p,
     .st-key-pipeline_card [data-testid="stToggle"] label p,
@@ -1176,12 +1226,13 @@ render_title()
 render_header()
 
 SAMPLE_LABEL, PLACEHOLDER = "Sample scene (synthetic city)", "Choose a source…"
-VIEWS = ["Side by side", "Slider", "Original", "Dehazed", "Stages"]
-STAGE_LABELS = ["01 Dark Channel", "04 Smoothing", "05 Sharpening", "02 Histogram", "03 Frequency", "06 Tone"]  # run order
+VIEWS = ["Side by side", "Slider", "Original", "Dehazed", "Stages", "Edges"]
+STAGE_LABELS = ["01 Dark Channel", "02 Deblur", "05 Smoothing", "06 Sharpening", "03 Histogram", "04 Frequency", "07 Tone"]  # run order
 
 for _k, _v in {"source_key": None, "source_img": None, "source_depth": None, "reference": None,
                "pre_foggy": True, "fog_density": 1.6, "upload_round": 0, "upload_error": None,
-               "use_dcp": True, "source_choice": PLACEHOLDER, "preset_choice": "Balanced (default)",
+               "use_dcp": True, "source_choice": PLACEHOLDER, "blur_amount": 0.0, "blur_kind": "Gaussian",
+               "modules_only": False, "ref_raw": None, "ref_key": None, "ref_sig": None, "preset_choice": "Balanced (default)",
                **PRESETS["Balanced (default)"]}.items():
     st.session_state.setdefault(_k, _v)
 
@@ -1200,6 +1251,7 @@ def _apply_reset():
     st.session_state.sharpen_strength = 0
     st.session_state.tone_gamma = 1.0
     st.session_state.tone_sat = 1.0
+    st.session_state.deblur_amount = 0.0
 
 
 def _apply_preset():
@@ -1221,6 +1273,18 @@ def _choose_source():
     st.session_state.update(
         source_img=img, source_key=key, source_depth=None, pre_foggy=True,
         reference=(key, _read_rgb(ref, (img.shape[1], img.shape[0]))) if ref else None)
+
+
+def current_params():
+    """Pipeline settings from the sliders. 'Course modules only' keeps just the project's three
+    modules: frequency-domain enhancement, histogram stretching, adaptive smoothing and sharpening."""
+    ss = st.session_state
+    only = ss.modules_only
+    return dict(hist=ss.hist_strength, freq=ss.freq_strength, smooth=ss.smooth_strength,
+                sharpen=ss.sharpen_strength, omega=ss.dcp_omega, t0=ss.dcp_t0, patch=ss.dcp_patch,
+                use_dcp=bool(ss.use_dcp and not only), deblur=0.0 if only else ss.deblur_amount,
+                deblur_kind=ss.deblur_kind, deblur_k=ss.deblur_k,
+                gamma=1.0 if only else ss.tone_gamma, sat=1.0 if only else ss.tone_sat, cutoff=ss.freq_cutoff)
 
 
 has_image = st.session_state.source_img is not None
@@ -1267,8 +1331,10 @@ with left_col:
                 st.error(st.session_state.upload_error)
         else:
             raw = st.session_state.source_img
-            hazy = raw if st.session_state.pre_foggy else simulate_fog(
-                raw, st.session_state.source_depth, st.session_state.fog_density)
+            hazy = raw if st.session_state.pre_foggy else simulate_blur(
+                simulate_fog(raw, st.session_state.source_depth, st.session_state.fog_density),
+                st.session_state.blur_amount, st.session_state.blur_kind)
+            P = current_params()
             src_h, src_w = hazy.shape[:2]
             view = st.session_state.get("view_mode") or "Side by side"
             # Only for a sliver of a picture (taller than 5:1): see the preview CSS.
@@ -1281,7 +1347,7 @@ with left_col:
             )
             single_cap = (
                 '.st-key-preview_images { width: min(100%, calc(var(--pv-maxh) * var(--pv-ar, 1.25))) !important; }'
-                if view not in ("Side by side", "Stages") else ""
+                if view not in ("Side by side", "Stages", "Edges") else ""
             )
             top_l, top_r = st.columns([3, 1])
             with top_l:
@@ -1309,23 +1375,13 @@ with left_col:
             elif view == "Stages":
                 st.pills("Stage", STAGE_LABELS, default=STAGE_LABELS[0], key="stage_pick",
                          label_visibility="collapsed")
-                st.caption("Stages in the order they run: each pair shows the image before and after that stage.")
+                st.segmented_control("Stage mode", ["Cumulative", "This stage only"], default="Cumulative",
+                                     key="stage_mode", label_visibility="collapsed")
+                st.caption("Cumulative follows the order the stages run. This stage only applies the one stage "
+                           "to the original.")
 
             with st.spinner("Processing…"):
-                result, pipe_info = run_pipeline(
-                    hazy,
-                    st.session_state.hist_strength,
-                    st.session_state.freq_strength,
-                    st.session_state.smooth_strength,
-                    st.session_state.sharpen_strength,
-                    st.session_state.dcp_omega,
-                    st.session_state.dcp_t0,
-                    st.session_state.dcp_patch,
-                    st.session_state.use_dcp,
-                    st.session_state.tone_gamma,
-                    st.session_state.tone_sat,
-                    st.session_state.freq_cutoff,
-                )
+                result = run_pipeline(hazy, P)
 
             with st.container(key="preview_images"):
                 if view == "Side by side":
@@ -1341,19 +1397,26 @@ with left_col:
                 elif view == "Stages":
                     pick = st.session_state.get("stage_pick") or STAGE_LABELS[0]
                     idx = STAGE_LABELS.index(pick)
-                    steps = run_stages(
-                        hazy, st.session_state.hist_strength, st.session_state.freq_strength,
-                        st.session_state.smooth_strength, st.session_state.sharpen_strength,
-                        st.session_state.dcp_omega, st.session_state.dcp_t0, st.session_state.dcp_patch,
-                        st.session_state.use_dcp, st.session_state.tone_gamma, st.session_state.tone_sat,
-                        st.session_state.freq_cutoff)
+                    name = STAGE_ORDER[idx]
+                    if st.session_state.get("stage_mode") == "This stage only":
+                        before, after, cap_b = hazy, apply_stage(name, hazy, P), "Original"
+                    else:
+                        steps = run_stages(hazy, P)
+                        before, after = steps[idx][1], steps[idx + 1][1]
+                        cap_b = "Original" if idx == 0 else f"After the stage before {pick}"
                     col_b, col_a = st.columns(2)
                     with col_b:
-                        st.image(steps[idx][1], caption="Original" if idx == 0 else f"After the stage before {pick}",
-                                 width="stretch")
+                        st.image(before, caption=cap_b, width="stretch")
                     with col_a:
-                        st.image(steps[idx + 1][1], width="stretch",
-                                 caption=f"After {pick}" if steps[idx + 1][2] else f"{pick} is off, so nothing changes")
+                        st.image(after, width="stretch",
+                                 caption=f"After {pick}" if stage_active(name, P) else f"{pick} is off, so nothing changes")
+                elif view == "Edges":
+                    e0, e1 = edge_maps(hazy, result)
+                    col_b, col_a = st.columns(2)
+                    with col_b:
+                        st.image(e0, caption="Original edges", width="stretch")
+                    with col_a:
+                        st.image(e1, caption="Dehazed edges (same scale)", width="stretch")
                 elif view == "Original":
                     st.image(hazy, caption="Original", width="stretch")
                 else:
@@ -1363,8 +1426,12 @@ with left_col:
             st.markdown('<div class="card-heading" style="font-size:1.5rem;margin-top:1.4rem">Measurements</div>',
                         unsafe_allow_html=True)
             m0, m1 = quality_metrics(hazy), quality_metrics(result)
-            ref_pack = st.session_state.reference
-            ref = ref_pack[1] if ref_pack and ref_pack[0] == st.session_state.source_key else None
+            if not st.session_state.pre_foggy:
+                ref = raw      # fog and blur were simulated on this clear photo, so it is the reference
+            elif st.session_state.ref_raw is not None and st.session_state.ref_key == st.session_state.source_key:
+                ref = cv2.resize(st.session_state.ref_raw, (hazy.shape[1], hazy.shape[0]), interpolation=cv2.INTER_AREA)
+            else:
+                ref = None
 
             def _row(name, a, b, d):
                 return f"<tr><td>{name}</td><td>{a:.{d}f}</td><td><b>{b:.{d}f}</b></td></tr>"
@@ -1424,10 +1491,36 @@ with right_col:
                         unsafe_allow_html=True)
             st.slider("Fog density", 0.0, 4.0, step=0.05, key="fog_density",
                       disabled=st.session_state.pre_foggy, label_visibility="collapsed")
+            blur_txt = "off" if st.session_state.blur_amount == 0 else f"{st.session_state.blur_amount:.1f}px"
+            st.markdown(_param_row("Simulated blur", blur_txt), unsafe_allow_html=True)
+            st.slider("Blur amount", 0.0, 10.0, step=0.5, key="blur_amount",
+                      disabled=st.session_state.pre_foggy, label_visibility="collapsed")
+            st.selectbox("Blur type", ["Gaussian", "Motion"], key="blur_kind", disabled=st.session_state.pre_foggy)
+            if st.session_state.pre_foggy and has_image:
+                with st.expander("Compare with a clear photo (optional)"):
+                    ref_up = st.file_uploader(
+                        "Clear reference photo", label_visibility="collapsed",
+                        key=f"ref_up_{abs(hash(str(st.session_state.source_key))) % 10**8}")
+                    if ref_up is not None:
+                        sig = f"{ref_up.name}-{ref_up.size}"
+                        if st.session_state.ref_sig != sig or st.session_state.ref_key != st.session_state.source_key:
+                            try:
+                                st.session_state.ref_raw = load_photo(ref_up)
+                                st.session_state.ref_key = st.session_state.source_key
+                                st.session_state.ref_sig = sig
+                                st.rerun()
+                            except Exception as exc:
+                                st.error(unreadable_message(ref_up.name, exc))
+                    elif st.session_state.ref_raw is not None and st.session_state.ref_key == st.session_state.source_key:
+                        st.session_state.ref_raw = None
+                        st.session_state.ref_sig = None
+                        st.rerun()
+            st.toggle("Course modules only (skip dark channel, deblur and tone)", key="modules_only")
 
         # Stage 01 — Dark Channel Prior
         with st.container(key="stage_dcp"):
-            st.markdown(_stage_row("01", "Dark Channel Prior", "On" if st.session_state.use_dcp else "Off"),
+            st.markdown(_stage_row("01", "Dark Channel Prior",
+                                  "On" if st.session_state.use_dcp and not st.session_state.modules_only else "Off"),
                         unsafe_allow_html=True)
             st.toggle("Remove fog before the other stages", key="use_dcp")
             st.markdown(_param_row("Haze removed (ω)", f"{st.session_state.dcp_omega:.2f}"), unsafe_allow_html=True)
@@ -1438,14 +1531,26 @@ with right_col:
             st.markdown(_param_row("Patch size", "auto" if patch == 0 else f"{patch}px"), unsafe_allow_html=True)
             st.slider("Patch size", 0, 61, step=1, key="dcp_patch", label_visibility="collapsed")
 
-        # Stage 02 — Histogram Stretch
+        # Stage 02 — Deblur
+        with st.container(key="stage_deblur"):
+            amt = st.session_state.deblur_amount
+            st.markdown(_stage_row("02", "Deblur (Wiener)", "off" if amt == 0 else f"{amt:.1f}px"),
+                        unsafe_allow_html=True)
+            st.markdown(_param_row("Blur to undo", "off" if amt == 0 else f"{amt:.1f}px"), unsafe_allow_html=True)
+            st.slider("Blur to undo", 0.0, 10.0, step=0.5, key="deblur_amount", label_visibility="collapsed")
+            st.selectbox("Assumed blur type", ["Gaussian", "Motion"], key="deblur_kind")
+            st.markdown(_param_row("Noise damping (K)", f"{st.session_state.deblur_k:.3f}"), unsafe_allow_html=True)
+            st.slider("Noise damping", 0.001, 0.100, step=0.001, format="%.3f", key="deblur_k",
+                      label_visibility="collapsed")
+
+        # Stage 03 — Histogram Stretch
         with st.container(key="stage_hist"):
-            st.markdown(_stage_row("02", "Histogram Stretch", st.session_state.hist_strength), unsafe_allow_html=True)
+            st.markdown(_stage_row("03", "Histogram Stretch", st.session_state.hist_strength), unsafe_allow_html=True)
             hist_strength = st.slider("Histogram strength", 0, 100, key="hist_strength", label_visibility="collapsed")
 
         # Stage 03 — Frequency-Domain Filter
         with st.container(key="stage_freq"):
-            st.markdown(_stage_row("03", "Frequency-Domain Filter", st.session_state.freq_strength),
+            st.markdown(_stage_row("04", "Frequency-Domain Filter", st.session_state.freq_strength),
                         unsafe_allow_html=True)
             freq_strength = st.slider("Frequency strength", 0, 100, key="freq_strength", label_visibility="collapsed")
             st.markdown(_param_row("Cutoff radius", f"{st.session_state.freq_cutoff}px"), unsafe_allow_html=True)
@@ -1453,20 +1558,20 @@ with right_col:
 
         # Stage 04 — Adaptive Smoothing
         with st.container(key="stage_smooth"):
-            st.markdown(_stage_row("04", "Adaptive Smoothing", st.session_state.smooth_strength),
+            st.markdown(_stage_row("05", "Adaptive Smoothing", st.session_state.smooth_strength),
                         unsafe_allow_html=True)
             smooth_strength = st.slider("Smoothing strength", 0, 100, key="smooth_strength", label_visibility="collapsed")
 
         # Stage 05 — Adaptive Sharpening
         with st.container(key="stage_sharpen"):
-            st.markdown(_stage_row("05", "Adaptive Sharpening", st.session_state.sharpen_strength),
+            st.markdown(_stage_row("06", "Adaptive Sharpening", st.session_state.sharpen_strength),
                         unsafe_allow_html=True)
             sharpen_strength = st.slider("Sharpening strength", 0, 100, key="sharpen_strength",
                                          label_visibility="collapsed")
 
         # Stage 06 — Final Tone
         with st.container(key="stage_tone"):
-            st.markdown(_stage_row("06", "Final Tone", "gamma · saturation"), unsafe_allow_html=True)
+            st.markdown(_stage_row("07", "Final Tone", "gamma · saturation"), unsafe_allow_html=True)
             st.markdown(_param_row("Gamma", f"{st.session_state.tone_gamma:.2f}"), unsafe_allow_html=True)
             st.slider("Gamma", 0.60, 1.60, step=0.05, key="tone_gamma", label_visibility="collapsed")
             st.markdown(_param_row("Saturation", f"{st.session_state.tone_sat:.2f}"), unsafe_allow_html=True)
@@ -1507,10 +1612,17 @@ with lower_col:
             "filter in the Fourier domain then work on luminance only."
         )
         m_l.markdown(
-            "For simulated fog on photos, depth is assumed to grow toward the top of the frame. "
-            "The measurements compare the original and the dehazed image without a reference: contrast, "
-            "entropy and gradient rise when structure becomes visible, but they also rise when an image "
-            "is over-sharpened, so judge them together with the picture itself."
+            "Blur is undone with Wiener deconvolution in the Fourier domain, for an assumed Gaussian or "
+            "horizontal motion blur. *Course modules only* runs just the three project modules: "
+            "frequency-domain enhancement, histogram stretching, and adaptive smoothing and sharpening. "
+            "The Edges view shows the Sobel gradient of both images on one scale, so you can see how much "
+            "more of the buildings and roads shows up."
+        )
+        m_l.markdown(
+            "When fog and blur are simulated on a clear photo, that photo is the reference for PSNR and "
+            "SSIM; for a real foggy photo you can add a clear one. Depth for simulated fog is assumed to "
+            "grow toward the top of the frame. Contrast, entropy and gradient rise when structure becomes "
+            "visible, but also when an image is over-sharpened, so judge them together with the picture."
         )
         m_r.markdown('<p class="ufc-sub">References</p>', unsafe_allow_html=True)
         m_r.markdown(
@@ -1520,5 +1632,7 @@ with lower_col:
             "3. Narasimhan, S. G. and Nayar, S. K. (2002). Vision and the atmosphere. *IJCV*, 48(3), 233–254.\n"
             "4. Koschmieder, H. (1924). Theorie der horizontalen Sichtweite. *Beitr. Phys. freien Atm.*, 12, 33–53.\n"
             "5. Gonzalez, R. C. and Woods, R. E. (2018). *Digital Image Processing*, 4th ed. Pearson.\n"
-            "6. Tomasi, C. and Manduchi, R. (1998). Bilateral filtering for gray and color images. *Proc. ICCV*, 839–846."
+            "6. Tomasi, C. and Manduchi, R. (1998). Bilateral filtering for gray and color images. *Proc. ICCV*, 839–846.\n"
+            "7. Wang, Z. et al. (2004). Image quality assessment: from error visibility to structural similarity. "
+            "*IEEE TIP*, 13(4), 600–612."
         )
