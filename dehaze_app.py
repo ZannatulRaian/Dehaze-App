@@ -1,5 +1,5 @@
 """
-Urban Fog Cleaner — Dehazing Console
+Dehazing Console
 =====================================
 Streamlit console around the image-processing pipeline in `urban.py`:
 upload a hazy photo, tune the filters, download the result.
@@ -701,7 +701,7 @@ def render_title():
     button) rather than in a row of its own, which hands that height to the
     cards and so to the preview images — see inject_css."""
     _, title_col, _ = st.columns(PAGE_SPLIT, gap="large")
-    title_col.markdown('<div class="ufc-title">Urban Fog Cleaner</div>', unsafe_allow_html=True)
+    title_col.markdown('<div class="ufc-title">Dehaze App</div>', unsafe_allow_html=True)
 
 
 def render_header():
