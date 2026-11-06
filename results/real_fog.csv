@@ -1,50 +1,50 @@
-scene,method,psnr,ssim,contrast_x,edges_pct,seconds
-scene03,Foggy input (no processing),14.921,0.734,1.0,7.5059,0.0036
-scene03,Histogram stretching only,10.7114,0.7304,2.5764,28.6497,0.0175
-scene03,Frequency-domain enhancement only,14.9802,0.7856,1.0389,17.5005,0.0638
-scene03,Adaptive smoothing + sharpening only,14.8966,0.6654,1.003,3.4997,0.0448
-scene03,The three course modules together,16.8918,0.7914,1.8343,21.7765,0.0686
-scene03,Dark channel prior only,19.9704,0.8345,0.9356,14.5544,0.0762
-scene03,Full pipeline (Balanced default),20.8915,0.7974,1.5082,22.2053,0.0821
-scene07,Foggy input (no processing),17.2985,0.7954,1.0,14.211,0.0031
-scene07,Histogram stretching only,8.6975,0.5894,2.5198,46.8613,0.0109
-scene07,Frequency-domain enhancement only,17.3221,0.8245,1.1569,30.3543,0.0389
-scene07,Adaptive smoothing + sharpening only,17.2393,0.7173,1.0515,8.6312,0.0316
-scene07,The three course modules together,11.237,0.6231,2.0177,36.0841,0.0709
-scene07,Dark channel prior only,21.4928,0.9057,1.1749,25.1248,0.079
-scene07,Full pipeline (Balanced default),16.1796,0.7093,2.4769,43.8108,0.0887
-scene10,Foggy input (no processing),12.2545,0.6548,1.0,15.8726,0.0046
-scene10,Histogram stretching only,10.291,0.7057,1.6845,29.1632,0.016
-scene10,Frequency-domain enhancement only,12.2965,0.7062,1.0313,29.011,0.0655
-scene10,Adaptive smoothing + sharpening only,12.2533,0.615,1.0061,12.4389,0.05
-scene10,The three course modules together,10.7367,0.6584,1.6001,33.3084,0.1095
-scene10,Dark channel prior only,15.6244,0.7554,0.7471,21.4728,0.1177
-scene10,Full pipeline (Balanced default),14.5245,0.7115,1.368,35.95,0.1362
-scene11,Foggy input (no processing),13.1103,0.6048,1.0,24.0051,0.0038
-scene11,Histogram stretching only,11.9444,0.6729,1.6558,39.0807,0.01
-scene11,Frequency-domain enhancement only,13.2251,0.719,1.0543,40.2424,0.0419
-scene11,Adaptive smoothing + sharpening only,13.0908,0.5175,1.0068,16.99,0.0372
-scene11,The three course modules together,12.578,0.665,1.4316,40.4632,0.0736
-scene11,Dark channel prior only,14.3252,0.6245,0.665,27.4679,0.0904
-scene11,Full pipeline (Balanced default),15.4562,0.694,1.1776,40.8275,0.101
-scene12,Foggy input (no processing),13.3347,0.6517,1.0,19.9565,0.0039
-scene12,Histogram stretching only,17.6226,0.7933,2.5148,53.9046,0.0166
-scene12,Frequency-domain enhancement only,13.4102,0.7409,1.1954,39.1775,0.0481
-scene12,Adaptive smoothing + sharpening only,13.3184,0.5613,1.0284,11.509,0.0404
-scene12,The three course modules together,16.4574,0.7035,2.3378,48.2518,0.0917
-scene12,Dark channel prior only,16.0011,0.7648,1.4846,39.2246,0.1101
-scene12,Full pipeline (Balanced default),15.8476,0.6819,2.4417,52.8824,0.1235
-scene14,Foggy input (no processing),14.6597,0.7036,1.0,7.7306,0.0044
-scene14,Histogram stretching only,15.8843,0.816,2.6907,32.7812,0.0118
-scene14,Frequency-domain enhancement only,14.7705,0.7899,1.0435,18.5196,0.0411
-scene14,Adaptive smoothing + sharpening only,14.6272,0.6,1.0036,4.3139,0.0386
-scene14,The three course modules together,17.2797,0.7642,2.3291,24.3738,0.0895
-scene14,Dark channel prior only,15.7713,0.796,1.853,22.415,0.1021
-scene14,Full pipeline (Balanced default),13.7951,0.6879,2.8656,31.6215,0.088
-scene15,Foggy input (no processing),10.6009,0.5753,1.0,1.767,0.0031
-scene15,Histogram stretching only,9.7726,0.5978,3.3509,17.599,0.0112
-scene15,Frequency-domain enhancement only,10.6199,0.604,1.0253,5.4134,0.0352
-scene15,Adaptive smoothing + sharpening only,10.5935,0.5352,1.0004,0.98,0.0327
-scene15,The three course modules together,11.0545,0.5825,2.9467,11.3567,0.0687
-scene15,Dark channel prior only,16.1472,0.7033,1.3272,8.4491,0.0793
-scene15,Full pipeline (Balanced default),14.6756,0.6585,2.3993,15.015,0.0806
+scene,method,psnr,ssim,contrast_x,edges_pct,seconds,canny_pct,lines,lines_vertical,lines_oblique,edge_f1,edge_f1_auto,line_recall
+scene03,Foggy input (no processing),14.921,0.734,1.0,7.5059,0.0024,0.1534,4,0,2,0.1181,0.0368,0.0533
+scene03,Histogram stretching only,10.7114,0.7304,2.5764,28.6497,0.0105,3.5411,124,34,23,0.6691,0.4638,0.6667
+scene03,Frequency-domain enhancement only,14.9802,0.7856,1.0389,17.5005,0.0307,0.6938,12,6,2,0.4345,0.157,0.1467
+scene03,Adaptive smoothing + sharpening only,14.8966,0.6654,1.003,3.4997,0.0254,0.394,8,3,1,0.2778,0.0957,0.0933
+scene03,The three course modules together,16.8918,0.7914,1.8343,21.7765,0.0522,4.2784,157,32,37,0.6382,0.7396,0.6667
+scene03,Dark channel prior only,19.9704,0.8345,0.9356,14.5544,0.0566,0.2744,2,1,0,0.2012,0.6969,0.0267
+scene03,Full pipeline (Balanced default),20.8915,0.7974,1.5082,22.2053,0.0631,6.0703,219,44,30,0.5571,0.8026,0.7333
+scene07,Foggy input (no processing),17.2985,0.7954,1.0,14.211,0.0022,0.6773,9,6,3,0.3294,0.2804,0.1373
+scene07,Histogram stretching only,8.6975,0.5894,2.5198,46.8613,0.0076,8.2134,283,11,73,0.5636,0.6701,0.6863
+scene07,Frequency-domain enhancement only,17.3221,0.8245,1.1569,30.3543,0.0257,2.2615,38,5,11,0.728,0.5774,0.4902
+scene07,Adaptive smoothing + sharpening only,17.2393,0.7173,1.0515,8.6312,0.0253,1.2763,13,5,4,0.5381,0.3805,0.2353
+scene07,The three course modules together,11.237,0.6231,2.0177,36.0841,0.0544,9.0217,413,7,69,0.5425,0.8275,0.6275
+scene07,Dark channel prior only,21.4928,0.9057,1.1749,25.1248,0.0553,2.2947,51,4,5,0.7595,0.8864,0.5294
+scene07,Full pipeline (Balanced default),16.1796,0.7093,2.4769,43.8108,0.0648,12.2024,701,8,170,0.433,0.778,0.4902
+scene10,Foggy input (no processing),12.2545,0.6548,1.0,15.8726,0.0034,0.7295,6,0,1,0.1844,0.0278,0.0034
+scene10,Histogram stretching only,10.291,0.7057,1.6845,29.1632,0.0106,6.161,616,8,375,0.7294,0.4051,0.3635
+scene10,Frequency-domain enhancement only,12.2965,0.7062,1.0313,29.011,0.0354,5.5298,535,3,294,0.7039,0.3523,0.2765
+scene10,Adaptive smoothing + sharpening only,12.2533,0.615,1.0061,12.4389,0.0383,2.1499,81,2,36,0.4475,0.1248,0.0478
+scene10,The three course modules together,10.7367,0.6584,1.6001,33.3084,0.0731,10.5836,1351,135,688,0.7304,0.779,0.4539
+scene10,Dark channel prior only,15.6244,0.7554,0.7471,21.4728,0.0842,2.4642,97,2,59,0.4826,0.67,0.0904
+scene10,Full pipeline (Balanced default),14.5245,0.7115,1.368,35.95,0.0867,11.3867,1333,199,790,0.7399,0.8045,0.4317
+scene11,Foggy input (no processing),13.1103,0.6048,1.0,24.0051,0.0026,0.2313,0,0,0,0.055,0.03,0.0
+scene11,Histogram stretching only,11.9444,0.6729,1.6558,39.0807,0.0072,3.0823,112,7,4,0.4925,0.4014,0.1375
+scene11,Frequency-domain enhancement only,13.2251,0.719,1.0543,40.2424,0.023,2.5218,97,6,2,0.4325,0.2089,0.1313
+scene11,Adaptive smoothing + sharpening only,13.0908,0.5175,1.0068,16.99,0.0273,0.7133,5,4,1,0.1569,0.0957,0.0104
+scene11,The three course modules together,12.578,0.665,1.4316,40.4632,0.0526,8.984,679,16,21,0.7077,0.6803,0.4479
+scene11,Dark channel prior only,14.3252,0.6245,0.665,27.4679,0.0586,0.6566,9,4,0,0.1419,0.4917,0.025
+scene11,Full pipeline (Balanced default),15.4562,0.694,1.1776,40.8275,0.0613,9.7709,746,27,58,0.7306,0.7616,0.4813
+scene12,Foggy input (no processing),13.3347,0.6517,1.0,19.9565,0.0031,0.6559,17,8,6,0.1961,0.1587,0.0482
+scene12,Histogram stretching only,17.6226,0.7933,2.5148,53.9046,0.0111,9.5402,762,48,294,0.6728,0.6708,0.5042
+scene12,Frequency-domain enhancement only,13.4102,0.7409,1.1954,39.1775,0.0327,2.5421,114,17,46,0.5458,0.2852,0.1898
+scene12,Adaptive smoothing + sharpening only,13.3184,0.5613,1.0284,11.509,0.0347,1.02,25,8,6,0.2928,0.2006,0.068
+scene12,The three course modules together,16.4574,0.7035,2.3378,48.2518,0.0721,12.6823,1277,71,483,0.6263,0.6425,0.4873
+scene12,Dark channel prior only,16.0011,0.7648,1.4846,39.2246,0.0742,3.0227,110,28,36,0.5547,0.7031,0.1388
+scene12,Full pipeline (Balanced default),15.8476,0.6819,2.4417,52.8824,0.0813,14.7154,1550,134,701,0.5683,0.4948,0.5099
+scene14,Foggy input (no processing),14.6597,0.7036,1.0,7.7306,0.0029,0.3498,9,7,0,0.1355,0.0047,0.0316
+scene14,Histogram stretching only,15.8843,0.816,2.6907,32.7812,0.0084,4.1194,230,30,47,0.7811,0.7967,0.4082
+scene14,Frequency-domain enhancement only,14.7705,0.7899,1.0435,18.5196,0.0232,0.9998,28,13,2,0.3387,0.0803,0.0601
+scene14,Adaptive smoothing + sharpening only,14.6272,0.6,1.0036,4.3139,0.0302,0.6139,17,10,0,0.2273,0.0482,0.038
+scene14,The three course modules together,17.2797,0.7642,2.3291,24.3738,0.055,6.1304,505,19,272,0.7541,0.7547,0.5316
+scene14,Dark channel prior only,15.7713,0.796,1.853,22.415,0.0649,2.5849,80,14,24,0.5914,0.7138,0.1614
+scene14,Full pipeline (Balanced default),13.7951,0.6879,2.8656,31.6215,0.0659,7.6178,634,39,264,0.732,0.6352,0.5823
+scene15,Foggy input (no processing),10.6009,0.5753,1.0,1.767,0.0024,0.1294,0,0,0,0.0683,0.0096,0.0
+scene15,Histogram stretching only,9.7726,0.5978,3.3509,17.599,0.0074,2.2334,87,4,29,0.5857,0.4712,0.3375
+scene15,Frequency-domain enhancement only,10.6199,0.604,1.0253,5.4134,0.0255,0.2699,2,0,0,0.1271,0.0524,0.0
+scene15,Adaptive smoothing + sharpening only,10.5935,0.5352,1.0004,0.98,0.0269,0.1853,2,0,0,0.0966,0.0321,0.0
+scene15,The three course modules together,11.0545,0.5825,2.9467,11.3567,0.0552,2.8308,111,6,43,0.6304,0.5953,0.375
+scene15,Dark channel prior only,16.1472,0.7033,1.3272,8.4491,0.0583,0.9258,19,0,6,0.358,0.5844,0.0813
+scene15,Full pipeline (Balanced default),14.6756,0.6585,2.3993,15.015,0.0655,3.9711,161,14,52,0.7558,0.7866,0.625

@@ -128,9 +128,9 @@ def _guided_filter(guide, src, radius, eps):
     return mean(a) * guide + mean(b)
 
 
-def dark_channel_prior(img, omega=0.95, t0=0.15, patch=0):
-    """Single-image haze removal (He et al.): estimate the airlight A and a
-    per-pixel transmission t, then recover J = (I - A) / t + A."""
+def estimate_transmission(img, omega=0.95, t0=0.15, patch=0):
+    """Dark-channel estimate of the airlight A and the per-pixel transmission t (guided-filter
+    refined, clipped to [t0, 1]). Returned separately so it can be checked against a known depth map."""
     I = img.astype(np.float32) / 255.0
     h, w = I.shape[:2]
     size = (max(3, int(patch)) | 1) if patch else (max(3, round(max(h, w) / 80)) | 1)  # odd window; auto ~15 px at 1200 px
@@ -152,9 +152,14 @@ def dark_channel_prior(img, omega=0.95, t0=0.15, patch=0):
     gray = cv2.cvtColor(I, cv2.COLOR_RGB2GRAY)
     radius = max(1, min(size * 3, (min(h, w) - 1) // 2))
     t = _guided_filter(gray, t.astype(np.float32), radius, 1e-3)
-    t = np.clip(t, t0, 1.0)
+    return np.clip(t, t0, 1.0), A
 
-    J = (I - A) / t[:, :, None] + A
+
+def dark_channel_prior(img, omega=0.95, t0=0.15, patch=0):
+    """Single-image haze removal (He et al.): estimate the airlight A and a
+    per-pixel transmission t, then recover J = (I - A) / t + A."""
+    t, A = estimate_transmission(img, omega, t0, patch)
+    J = (img.astype(np.float32) / 255.0 - A) / t[:, :, None] + A
     return np.clip(J * 255.0 + 0.5, 0, 255).astype(np.uint8)
 
 
@@ -223,6 +228,83 @@ def wiener_deblur(img, amount, kind="Gaussian", k=0.01):
     return cv2.cvtColor(ycc, cv2.COLOR_YCrCb2RGB)
 
 
+# ---------------------------------------------------------------- blur estimation
+BLUR_BASELINE = 0.65   # edge spread (px, std) of a sharp photo at the app's working size
+BLUR_MIN = 0.7         # excess spread (px) below which an image is called sharp
+GAUSS_SCALE = 1.15     # Gaussian estimates read ~13 % low (tails of the edge profile are cut); fit on the 7 real
+                       # photos only, so the synthetic cities stay an independent check (see evaluate.py)
+
+
+def _edge_spread(L, axis, top=0.08, reach=30):
+    """Median spread (std, px) of the intensity profile across the strongest edges, measured along one
+    axis (1 = across columns, i.e. horizontal profiles). A step edge blurred by a kernel has a gradient
+    profile equal to that kernel, so its std is the kernel's std: sigma for Gaussian blur, n/sqrt(12)
+    for a box of length n (horizontal motion blur). Fog scales the step and the gradient by the same
+    factor, so the spread does not depend on fog density. Returns None if there are too few edges."""
+    if axis == 0:
+        L = L.T
+    h, w = L.shape
+    if w < 2 * reach + 3 or h < 8:
+        return None
+    g = np.zeros_like(L)
+    g[:, 1:-1] = (L[:, 2:] - L[:, :-2]) * 0.5
+    a = np.abs(g)
+    peak = (a >= np.roll(a, 1, 1)) & (a > np.roll(a, -1, 1)) & (a > 0)
+    peak[:, :reach + 1] = peak[:, w - reach - 1:] = False
+    if peak.sum() < 100:
+        return None
+    ys, xs = np.nonzero(peak & (a >= np.quantile(a[peak], 1.0 - top)))
+    sgn, pk = np.sign(g[ys, xs]), a[ys, xs]
+    m0, m1, m2 = pk.copy(), np.zeros(len(xs)), np.zeros(len(xs))
+    for d in (1, -1):                            # walk out of the edge while the gradient keeps its sign
+        alive = np.ones(len(xs), bool)
+        for k in range(1, reach):
+            v = g[ys, xs + d * k] * sgn
+            alive &= v > 0.05 * pk
+            wk = np.where(alive, v, 0.0)
+            m0 += wk
+            m1 += wk * d * k
+            m2 += wk * k * k
+    c = m1 / m0
+    return float(np.median(np.sqrt(np.maximum(m2 / m0 - c * c, 0.0))))
+
+
+def estimate_blur(img):
+    """Blind estimate of the blur in a photo, in the units `wiener_deblur` and `simulate_blur` use.
+
+    Measures how wide the strongest edges are, horizontally and vertically, and subtracts the width of
+    a sharp photo (BLUR_BASELINE) in quadrature. Similar excess in both directions means Gaussian
+    (amount = sigma); excess in one direction only means directional motion blur (amount = box length / 3).
+    Returns {"kind": "none" | "Gaussian" | "Motion" | "Motion (vertical)", "amount": px,
+    "sigma_x": px, "sigma_y": px}; vertical motion is detected but `wiener_deblur` cannot undo it."""
+    L = _lum(img)
+    sx, sy = _edge_spread(L, 1), _edge_spread(L, 0)
+    out = {"kind": "none", "amount": 0.0, "sigma_x": sx, "sigma_y": sy}
+    if sx is None or sy is None:
+        return out
+    ex = math.sqrt(max(sx * sx - BLUR_BASELINE ** 2, 0.0))
+    ey = math.sqrt(max(sy * sy - BLUR_BASELINE ** 2, 0.0))
+    if max(ex, ey) < BLUR_MIN:
+        return out
+    if ex >= 1.7 * ey:                            # blurred along x only: box of length n, std n/sqrt(12), n = 3 * amount
+        out.update(kind="Motion", amount=ex * math.sqrt(12.0) / 3.0)
+    elif ey >= 1.7 * ex:
+        out.update(kind="Motion (vertical)", amount=ey * math.sqrt(12.0) / 3.0)
+    else:
+        out.update(kind="Gaussian", amount=GAUSS_SCALE * math.sqrt(0.5 * (ex * ex + ey * ey)))
+    out["amount"] = round(out["amount"], 2)
+    return out
+
+
+def auto_deblur_params(img, P):
+    """Copy of the settings P with the Wiener deblur set from `estimate_blur(img)`
+    (switched off when the photo looks sharp or the blur is one the deblur can't undo)."""
+    est = estimate_blur(img)
+    if est["kind"] in ("Gaussian", "Motion"):
+        return dict(P, deblur=est["amount"], deblur_kind=est["kind"]), est
+    return dict(P, deblur=0.0), est
+
+
 def apply_stage(name, img, P):
     if name == "dcp":
         return cached_dark_channel_prior(img, P["omega"], P["t0"], P["patch"]) if P["use_dcp"] else img
@@ -254,11 +336,13 @@ def dehaze_pipeline(img, P):
 FOG_AIRLIGHT = np.array([216, 223, 229], dtype=np.float32)
 
 
-def make_sample_scene(w=640, h=400):
+def make_sample_scene(w=640, h=400, seed=11, lane_lines=False):
     """Synthetic city street plus its depth map (0 = near, 1 = far), so fog can be
-    simulated with the real scattering model and the clear scene is known."""
+    simulated with the real scattering model and the clear scene is known. `seed` changes the
+    building layout (11 is the scene the app shows); `lane_lines` adds two solid lane lines, which the
+    evaluation's line detector needs (the dashes alone are too short to count as lines)."""
     k = w / 512.0
-    rnd = random.Random(11)
+    rnd = random.Random(seed)
     hz = int(h * 0.56)
     img = np.zeros((h, w, 3), np.uint8)
     depth = np.ones((h, w), np.float32)
@@ -286,6 +370,10 @@ def make_sample_scene(w=640, h=400):
     buildings(0.65, (78, 95, 114), 34, 50, 50, 150, int(-10 * k), w)
     buildings(0.42, (53, 66, 79), 40, 40, 40, 170, int(-10 * k), w)
     cv2.fillPoly(img, [np.array([[w * .46, hz], [w * .54, hz], [w * 1.1, h], [-w * .1, h]], np.int32)], (37, 39, 43))
+    if lane_lines:
+        for f in (0.2, 0.8):          # solid lane lines converging on the vanishing point
+            cv2.line(img, (int(w * (0.46 + 0.08 * f)), hz), (int(-0.1 * w + 1.2 * w * f), h), (225, 225, 225),
+                     max(1, int(2 * k)), cv2.LINE_AA)
     for i in range(1, 9):
         tt = i / 9
         py, sw = hz + (h - hz) * tt * tt, (1 + tt * 10) * k
@@ -302,6 +390,16 @@ def make_sample_scene(w=640, h=400):
             cv2.rectangle(img, (int(x0 + wx * s_), int(y0 + 13 * s_)), (int(x0 + (wx + 10) * s_), int(y0 + 20 * s_)), (17, 17, 17), -1)
         cv2.rectangle(depth, (x0, int(y0 - 10 * s_)), (int(x0 + 60 * s_), int(y0 + 20 * s_)), 0.157, -1)
     return img, depth
+
+
+def make_urban_set(n=6, w=640, h=400):
+    """n synthetic city streets (different building layouts), each as (clear image, true depth map)."""
+    return [make_sample_scene(w, h, seed=11 + i, lane_lines=True) for i in range(n)]
+
+
+def true_transmission(depth, density):
+    """Transmission the scattering model gives for a known depth map: t = exp(-beta * d)."""
+    return np.exp(-float(density) * depth).astype(np.float32)
 
 
 def simulate_fog(img, depth, density):
@@ -370,3 +468,81 @@ def ssim(a, b):
     sxx, syy, sxy = g(x * x) - mx * mx, g(y * y) - my * my, g(x * y) - mx * my
     s = ((2 * mx * my + c1) * (2 * sxy + c2)) / ((mx * mx + my * my + c1) * (sxx + syy + c2))
     return float(s.mean())
+
+
+# ---------------------------------------------------------------- downstream test: edges and lines
+CANNY_LOW, CANNY_HIGH = 50, 150    # the textbook fixed thresholds, so fog's low contrast shows up
+
+
+def canny_edges(img, auto=False):
+    """Standard Canny edge map (5x5 Gaussian pre-blur). auto=False: fixed thresholds 50/150;
+    auto=True: thresholds set from the image's median (0.66 and 1.33 x median), which hides low contrast."""
+    gray = cv2.GaussianBlur(cv2.cvtColor(img, cv2.COLOR_RGB2GRAY), (5, 5), 1.4)
+    if auto:
+        m = float(np.median(gray))
+        return cv2.Canny(gray, max(5, 0.66 * m), max(15, 1.33 * m))
+    return cv2.Canny(gray, CANNY_LOW, CANNY_HIGH)
+
+
+def hough_lines(edges):
+    """Straight segments (x1, y1, x2, y2) from the probabilistic Hough transform, shape (n, 4)."""
+    cv2.setRNGSeed(0)                                  # HoughLinesP is randomised; fix it so runs repeat
+    found = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=50, minLineLength=30, maxLineGap=8)
+    return np.zeros((0, 4), np.float32) if found is None else found.reshape(-1, 4).astype(np.float32)
+
+
+def line_angles(lines):
+    """Angle of each segment from horizontal in degrees, 0 .. 180."""
+    return np.degrees(np.arctan2(lines[:, 3] - lines[:, 1], lines[:, 2] - lines[:, 0])) % 180.0
+
+
+def edge_f1(edges, ref_edges, tol=2):
+    """Precision, recall and F1 of an edge map against a reference edge map, counting a pixel as
+    matched when the other map has an edge within `tol` pixels."""
+    def near(a, b):      # share of edge pixels of a that have an edge of b within tol
+        if not a.any():
+            return 0.0
+        dist = cv2.distanceTransform((b == 0).astype(np.uint8), cv2.DIST_L2, 3)
+        return float((dist[a > 0] <= tol).mean())
+    pr, rc = near(edges, ref_edges) if ref_edges.any() else 0.0, near(ref_edges, edges)
+    return pr, rc, (2 * pr * rc / (pr + rc) if pr + rc else 0.0)
+
+
+def line_recall(lines, ref_lines, tol=4.0, max_angle=5.0):
+    """Share of the reference segments that have a found segment within `max_angle` degrees whose
+    line passes within `tol` px of the reference segment's midpoint."""
+    if len(ref_lines) == 0:
+        return float("nan")
+    if len(lines) == 0:
+        return 0.0
+    mid = (ref_lines[:, :2] + ref_lines[:, 2:]) * 0.5
+    ang_d = np.abs(line_angles(ref_lines)[:, None] - line_angles(lines)[None, :])
+    ang_d = np.minimum(ang_d, 180.0 - ang_d)
+    p, q = lines[:, :2], lines[:, 2:]
+    d = q - p
+    norm = np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-6)
+    off = np.abs((mid[:, None, 0] - p[None, :, 0]) * d[None, :, 1]
+                 - (mid[:, None, 1] - p[None, :, 1]) * d[None, :, 0]) / norm[None, :]
+    along = ((mid[:, None, 0] - p[None, :, 0]) * d[None, :, 0] + (mid[:, None, 1] - p[None, :, 1]) * d[None, :, 1]) / norm[None, :]
+    ok = (ang_d <= max_angle) & (off <= tol) & (along >= -tol) & (along <= norm[None, :] + tol)
+    return float(ok.any(axis=1).mean())
+
+
+def downstream_metrics(img, ref=None):
+    """Simple downstream test: what a standard edge detector and line detector find in the photo.
+    Counts: Canny edge pixels (% of the image), Hough segments, of which near-vertical ones (within 15 deg
+    of vertical: building edges) and oblique ones (20-70 deg from horizontal: lane lines, roof lines).
+    With a clear reference `ref` also: edge F1 against the reference's edges (fixed and auto thresholds) and
+    the share of the reference's line segments that are found again."""
+    edges = canny_edges(img)
+    lines = hough_lines(edges)
+    ang = line_angles(lines)
+    out = {"canny_pct": float(100.0 * (edges > 0).mean()), "lines": len(lines),
+           "lines_vertical": int((np.abs(ang - 90.0) <= 15.0).sum()),
+           "lines_oblique": int(((np.minimum(ang, 180.0 - ang) >= 20.0) & (np.minimum(ang, 180.0 - ang) <= 70.0)).sum())}
+    if ref is not None:
+        ref_edges = canny_edges(ref)
+        out["edge_f1"] = edge_f1(edges, ref_edges)[2]
+        out["edge_f1_auto"] = edge_f1(canny_edges(img, True), canny_edges(ref, True))[2]
+        out["line_recall"] = line_recall(lines, hough_lines(ref_edges))
+    return out

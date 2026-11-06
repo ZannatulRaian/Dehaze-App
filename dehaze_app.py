@@ -29,8 +29,9 @@ import streamlit as st
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from dehaze_core import (  # the image-processing code lives in dehaze_core.py
-    P_BALANCED, P_MODULES, STAGE_ORDER, apply_stage, dehaze_pipeline, edge_maps, make_sample_scene, psnr,
-    quality_metrics, simulate_blur as _simulate_blur, simulate_fog as _simulate_fog, ssim, stage_active,
+    P_BALANCED, P_MODULES, STAGE_ORDER, apply_stage, dehaze_pipeline, downstream_metrics, edge_maps,
+    estimate_blur as _estimate_blur, make_sample_scene, psnr, quality_metrics, simulate_blur as _simulate_blur,
+    simulate_fog as _simulate_fog, ssim, stage_active,
 )
 
 # Optional extra for iPhone HEIC/HEIF photos (it also gives an older Pillow
@@ -48,6 +49,8 @@ APP_DIR = Path(__file__).parent
 # Streamlit-cached versions of the fog / blur simulations
 simulate_fog = st.cache_data(show_spinner=False)(_simulate_fog)
 simulate_blur = st.cache_data(show_spinner=False)(_simulate_blur)
+estimate_blur = st.cache_data(show_spinner=False, max_entries=6)(_estimate_blur)
+downstream = st.cache_data(show_spinner=False, max_entries=8)(downstream_metrics)   # Canny + Hough counts
 MAX_DIM = 1200  # images larger than this (on the long edge) are downscaled
 
 
@@ -127,7 +130,7 @@ def _ui(P):
     return dict(hist_strength=P["hist"], freq_strength=P["freq"], smooth_strength=P["smooth"],
                 sharpen_strength=P["sharpen"], dcp_omega=P["omega"], dcp_t0=P["t0"], dcp_patch=P["patch"],
                 freq_cutoff=P["cutoff"], tone_gamma=P["gamma"], tone_sat=P["sat"], tone_balance=P["balance"],
-                deblur_amount=P["deblur"], deblur_kind=P["deblur_kind"], deblur_k=P["deblur_k"],
+                deblur_amount=P["deblur"], deblur_kind=P["deblur_kind"], deblur_k=P["deblur_k"], deblur_auto=False,
                 use_dcp=P["use_dcp"], modules_only=False)
 
 
@@ -956,6 +959,7 @@ def _apply_reset():
     st.session_state.tone_sat = 1.0
     st.session_state.tone_balance = 0
     st.session_state.deblur_amount = 0.0
+    st.session_state.deblur_auto = False
 
 
 def _apply_preset():
@@ -995,6 +999,7 @@ def current_params():
 has_image = st.session_state.source_img is not None
 pipe_info = None  # filled in by the Preview card once a photo is loaded
 hazy = result = None
+blur_est = None   # estimate_blur() of the photo when "detect the blur automatically" is on
 
 # Both cards live inside a narrower, centered strip rather than stretching
 # across the whole wide-mode page — full-width made them read as short,
@@ -1040,6 +1045,12 @@ with left_col:
                 simulate_fog(raw, st.session_state.source_depth, st.session_state.fog_density),
                 st.session_state.blur_amount, st.session_state.blur_kind)
             P = current_params()
+            if st.session_state.deblur_auto and not st.session_state.modules_only:
+                blur_est = estimate_blur(hazy)
+                if blur_est["kind"] in ("Gaussian", "Motion"):
+                    P = dict(P, deblur=round(blur_est["amount"] * 2) / 2, deblur_kind=blur_est["kind"])  # slider step 0.5
+                else:
+                    P = dict(P, deblur=0.0)
             src_h, src_w = hazy.shape[:2]
             view = st.session_state.get("view_mode") or "Side by side"
             # Only for a sliver of a picture (taller than 5:1): see the preview CSS.
@@ -1133,6 +1144,7 @@ with left_col:
             m0, m1 = quality_metrics(hazy), quality_metrics(result)
             # Only when fog (and blur) were simulated is there a clear reference: the photo itself.
             ref = raw if not st.session_state.pre_foggy else None
+            d0, d1 = downstream(hazy, ref), downstream(result, ref)
 
             def _row(name, a, b, d):
                 return f"<tr><td>{name}</td><td>{a:.{d}f}</td><td><b>{b:.{d}f}</b></td></tr>"
@@ -1140,10 +1152,16 @@ with left_col:
             rows = (_row("Contrast (std. dev.)", m0["contrast"], m1["contrast"], 1)
                     + _row("Entropy (bits)", m0["entropy"], m1["entropy"], 2)
                     + _row("Mean gradient", m0["gradient"], m1["gradient"], 2)
-                    + _row("Edge pixels (%)", m0["edges"], m1["edges"], 1))
+                    + _row("Edge pixels (%)", m0["edges"], m1["edges"], 1)
+                    + _row("Canny edges (% px)", d0["canny_pct"], d1["canny_pct"], 1)
+                    + _row("Lines found (Hough)", d0["lines"], d1["lines"], 0)
+                    + _row("&nbsp;&nbsp;vertical (buildings)", d0["lines_vertical"], d1["lines_vertical"], 0)
+                    + _row("&nbsp;&nbsp;oblique (lanes)", d0["lines_oblique"], d1["lines_oblique"], 0))
             if ref is not None:
                 rows += (_row("PSNR vs. clear (dB)", psnr(hazy, ref), psnr(result, ref), 1)
-                         + _row("SSIM vs. clear", ssim(hazy, ref), ssim(result, ref), 3))
+                         + _row("SSIM vs. clear", ssim(hazy, ref), ssim(result, ref), 3)
+                         + _row("Edge F1 vs. clear", d0["edge_f1"], d1["edge_f1"], 3)
+                         + _row("Line recall vs. clear", d0["line_recall"], d1["line_recall"], 3))
             rows += f"<tr><td>Processing time (s)</td><td>&ndash;</td><td><b>{proc_s:.2f}</b></td></tr>"
             st.markdown(
                 '<p class="ufc-cap">Structure visibility: edge pixels '
@@ -1222,12 +1240,23 @@ with right_col:
 
         # Stage 02 — Deblur
         with st.container(key="stage_deblur"):
+            auto_on = bool(st.session_state.deblur_auto and blur_est is not None)
             amt = st.session_state.deblur_amount
+            if auto_on:
+                amt = round(blur_est["amount"] * 2) / 2 if blur_est["kind"] in ("Gaussian", "Motion") else 0.0
             st.markdown(_stage_row("02", "Deblur (Wiener)", "off" if amt == 0 else f"{amt:.1f}px"),
                         unsafe_allow_html=True)
+            st.toggle("Detect the blur automatically", key="deblur_auto", disabled=st.session_state.modules_only)
+            if auto_on:
+                kind = blur_est["kind"]
+                st.caption("Detected: the photo looks sharp, nothing to undo." if kind == "none" else
+                           f"Detected: {kind.lower()} blur of about {blur_est['amount']:.1f} px "
+                           "(undone below)." if kind in ("Gaussian", "Motion") else
+                           "Detected: vertical motion blur, which this deblur cannot undo.")
             st.markdown(_param_row("Blur to undo", "off" if amt == 0 else f"{amt:.1f}px"), unsafe_allow_html=True)
-            st.slider("Blur to undo", 0.0, 10.0, step=0.5, key="deblur_amount", label_visibility="collapsed")
-            st.selectbox("Assumed blur type", ["Gaussian", "Motion"], key="deblur_kind")
+            st.slider("Blur to undo", 0.0, 10.0, step=0.5, key="deblur_amount", label_visibility="collapsed",
+                      disabled=auto_on)
+            st.selectbox("Assumed blur type", ["Gaussian", "Motion"], key="deblur_kind", disabled=auto_on)
             st.markdown(_param_row("Noise damping (K)", f"{st.session_state.deblur_k:.3f}"), unsafe_allow_html=True)
             st.slider("Noise damping", 0.001, 0.100, step=0.001, format="%.3f", key="deblur_k",
                       label_visibility="collapsed")
@@ -1347,15 +1376,17 @@ with lower_col:
             "filter in the Fourier domain then work on luminance only."
         )
         m_l.markdown(
-            "Blur is undone with Wiener deconvolution in the Fourier domain, for an assumed Gaussian or "
-            "horizontal motion blur. *Course modules only* runs just the three project modules: "
+            "Blur is undone with Wiener deconvolution in the Fourier domain, for a Gaussian or horizontal "
+            "motion blur whose size you set, or that the app measures from the width of the strongest edges "
+            "(*Detect the blur automatically*). *Course modules only* runs just the three project modules: "
             "frequency-domain enhancement, histogram stretching, and adaptive smoothing and sharpening. "
             "The Edges view shows the Sobel gradient of both images on one scale, so you can see how much "
             "more of the buildings and roads shows up."
         )
         m_l.markdown(
-            "When fog and blur are simulated on a clear photo, that photo is the reference for PSNR and "
-            "SSIM. Depth for simulated fog is assumed to "
+            "When fog and blur are simulated on a clear photo, that photo is the reference for PSNR and SSIM, "
+            "and for how well a Canny edge detector and a Hough line detector find the same edges and lines as "
+            "in the clear photo. Depth for simulated fog is assumed to "
             "grow toward the top of the frame. Contrast, entropy and gradient rise when structure becomes "
             "visible, but also when an image is over-sharpened, so judge them together with the picture. "
             "The default settings come from a parameter search on the bundled test scenes; evaluate.py "
