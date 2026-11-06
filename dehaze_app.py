@@ -1,7 +1,7 @@
 """
-Dehazing Console
-=====================================
-Streamlit console around the image-processing pipeline in `urban.py`:
+Dehaze App — Dehazing Console
+=============================
+Streamlit console around the image-processing pipeline in `dehaze_core.py`:
 upload a hazy photo, tune the filters, download the result.
 
 Folder layout expected next to this file:
@@ -19,14 +19,19 @@ import glob
 import io
 import math
 import random
+import time
+import zipfile
 from pathlib import Path
 
 import cv2
 import numpy as np
 import streamlit as st
 from PIL import Image, ImageOps, UnidentifiedImageError
-from scipy import ndimage
-from scipy.fft import fft2, fftshift, ifft2, ifftshift
+
+from dehaze_core import (  # the image-processing code lives in dehaze_core.py
+    P_BALANCED, P_MODULES, STAGE_ORDER, apply_stage, dehaze_pipeline, edge_maps, make_sample_scene, psnr,
+    quality_metrics, simulate_blur as _simulate_blur, simulate_fog as _simulate_fog, ssim, stage_active,
+)
 
 # Optional extra for iPhone HEIC/HEIF photos (it also gives an older Pillow
 # AVIF support):   pip install pillow-heif
@@ -39,6 +44,10 @@ except Exception:
     pass
 
 APP_DIR = Path(__file__).parent
+
+# Streamlit-cached versions of the fog / blur simulations
+simulate_fog = st.cache_data(show_spinner=False)(_simulate_fog)
+simulate_blur = st.cache_data(show_spinner=False)(_simulate_blur)
 MAX_DIM = 1200  # images larger than this (on the long edge) are downscaled
 
 
@@ -53,301 +62,13 @@ MAX_DIM = 1200  # images larger than this (on the long edge) are downscaled
 # on LUMINANCE only (the Y of YCrCb). Treating R, G and B separately shifts hues
 # and paints coloured noise, which is where the purple/blue blotches came from.
 
-FREQ_CUTOFF = 30  # frequency-domain cutoff radius, in frequency-plane pixels
 
 
-def hist_clip_percent(strength):
-    return (strength / 100.0) * 2.0          # 0 .. 2 % clipped from each end
-
-
-def freq_gain(strength):
-    return 1.0 + (strength / 100.0) * 1.5    # gain applied to fine detail
-
-
-def smoothing_tolerance(strength):
-    return 10.0 + 0.6 * strength             # how big a colour step still counts as an edge
-
-
-def edge_gain(strength):
-    return (strength / 100.0) * 2.0          # unsharp-mask amount
-
-
-def _to_ycc(img):
-    ycc = cv2.cvtColor(img.astype(np.float32) / 255.0, cv2.COLOR_RGB2YCrCb)
-    return ycc, ycc[:, :, 0] * 255.0
-
-
-def _from_ycc(ycc, y):
-    out = ycc.copy()
-    out[:, :, 0] = np.clip(y, 0.0, 255.0) / 255.0
-    rgb = cv2.cvtColor(out, cv2.COLOR_YCrCb2RGB)
-    return np.clip(rgb * 255.0 + 0.5, 0, 255).astype(np.uint8)
-
-
-def histogram_stretch(img, strength=55, return_range=False):
-    """Linear contrast stretch of the luminance, clipping `percent`% at each end."""
-    percent = hist_clip_percent(strength)
-    ycc, y = _to_ycc(img)
-    lo, hi = np.percentile(y, [percent, 100 - percent])
-    if strength <= 0 or hi - lo < 1.0:
-        out = img
-    else:
-        out = _from_ycc(ycc, (y - lo) * 255.0 / (hi - lo))
-    return (out, (float(lo), float(hi))) if return_range else out
-
-
-def adaptive_smoothing(img, strength=50):
-    """Edge-preserving smoothing: flat areas (and the noise the fog removal
-    amplifies there) are smoothed, edges are kept. The strength sets how big a
-    colour difference still counts as an edge."""
-    if strength <= 0:
-        return img
-    sigma_color = smoothing_tolerance(strength)
-    sigma_space = 3.0 + 0.05 * strength
-    return cv2.bilateralFilter(img, 7, sigma_color, sigma_space)
-
-
-def adaptive_sharpening(img, strength=50):
-    """Unsharp mask on luminance, with the added detail capped so strong edges
-    don't overshoot into white halos."""
-    amount = edge_gain(strength)
-    if amount <= 0:
-        return img
-    ycc, y = _to_ycc(img)
-    detail = np.clip(y - cv2.GaussianBlur(y, (0, 0), 1.5), -40.0, 40.0)
-    return _from_ycc(ycc, y + amount * detail)
-
-
-def frequency_enhancement(img, strength=55, cutoff=FREQ_CUTOFF):
-    """High-frequency emphasis on luminance: a smooth (Gaussian) high-pass, so
-    there is no ringing from a hard cutoff, and the image is mirror-padded so
-    the FFT's wrap-around doesn't leak detail across opposite borders."""
-    gain = freq_gain(strength)
-    if gain <= 1.0:
-        return img
-    ycc, y = _to_ycc(img)
-    h, w = y.shape
-    pad = max(0, min(48, h - 1, w - 1))
-    yp = np.pad(y, pad, mode="reflect") if pad else y
-    rows, cols = yp.shape
-    spectrum = fftshift(fft2(yp))
-    v = np.arange(rows) - rows // 2
-    u = np.arange(cols) - cols // 2
-    d2 = v[:, None] ** 2 + u[None, :] ** 2
-    high_pass = 1.0 - np.exp(-d2 / (2.0 * cutoff ** 2))
-    response = 1.0 + (gain - 1.0) * high_pass      # 1.0 at DC, `gain` at fine detail
-    out = np.real(ifft2(ifftshift(spectrum * response)))
-    out = out[pad:pad + h, pad:pad + w]
-    return _from_ycc(ycc, out)
-
-
-def _guided_filter(guide, src, radius, eps):
-    """Edge-aware smoothing of `src` that follows the edges of `guide`
-    (He et al., 'Guided Image Filtering')."""
-    k = (2 * radius + 1, 2 * radius + 1)
-
-    def mean(x):
-        return cv2.boxFilter(x, -1, k, borderType=cv2.BORDER_REFLECT)
-
-    mean_g, mean_s = mean(guide), mean(src)
-    cov = mean(guide * src) - mean_g * mean_s
-    var = mean(guide * guide) - mean_g * mean_g
-    a = cov / (var + eps)
-    b = mean_s - a * mean_g
-    return mean(a) * guide + mean(b)
-
-
-def dark_channel_prior(img, omega=0.95, t0=0.15, patch=0):
-    """Single-image haze removal (He et al.): estimate the airlight A and a
-    per-pixel transmission t, then recover J = (I - A) / t + A."""
-    I = img.astype(np.float32) / 255.0
-    h, w = I.shape[:2]
-    size = (max(3, int(patch)) | 1) if patch else (max(3, round(max(h, w) / 80)) | 1)  # odd window; auto ~15 px at 1200 px
-
-    dark = ndimage.minimum_filter(I.min(axis=2), size=size)
-
-    # Airlight: of the haziest 0.1% of pixels (brightest in the dark channel),
-    # take the single brightest one — one pixel, so its colour stays consistent.
-    n = max(1, int(0.001 * dark.size))
-    idx = np.argpartition(dark.ravel(), -n)[-n:]
-    candidates = I.reshape(-1, 3)[idx]
-    A = np.maximum(candidates[np.argmax(candidates.sum(axis=1))], 0.1)
-
-    # Transmission, each colour channel normalised by ITS OWN airlight value.
-    t = 1.0 - omega * ndimage.minimum_filter((I / A).min(axis=2), size=size)
-
-    # Refine with a guided filter so t follows the photo's real edges. The raw
-    # min-filter map is blocky, which shows up as blocks and halos in the result.
-    gray = cv2.cvtColor(I, cv2.COLOR_RGB2GRAY)
-    radius = max(1, min(size * 3, (min(h, w) - 1) // 2))
-    t = _guided_filter(gray, t.astype(np.float32), radius, 1e-3)
-    t = np.clip(t, t0, 1.0)
-
-    J = (I - A) / t[:, :, None] + A
-    return np.clip(J * 255.0 + 0.5, 0, 255).astype(np.uint8)
-
-
-@st.cache_data(show_spinner=False)
-def cached_dark_channel_prior(img, omega=0.95, t0=0.15, patch=0):
-    return dark_channel_prior(img, omega, t0, patch)
-
-
-def tone_adjust(img, gamma=1.0, saturation=1.0):
-    """Final gamma and colour-saturation step (both 1.0 = untouched)."""
-    if gamma == 1.0 and saturation == 1.0:
-        return img
-    f = img.astype(np.float32) / 255.0
-    if saturation != 1.0:
-        lum = (f @ np.array([0.299, 0.587, 0.114], dtype=np.float32))[..., None]
-        f = np.clip(lum + (f - lum) * saturation, 0.0, 1.0)
-    if gamma != 1.0:
-        f = f ** (1.0 / gamma)
-    return np.clip(f * 255.0 + 0.5, 0, 255).astype(np.uint8)
-
-
-STAGE_ORDER = ["dcp", "deblur", "smooth", "sharpen", "hist", "freq", "tone"]   # the order they run
-
-
-def wiener_deblur(img, amount, kind="Gaussian", k=0.01):
-    """Wiener deconvolution of luminance in the Fourier domain, for an assumed Gaussian blur
-    (std = amount px) or horizontal motion blur (length = 3 x amount px). k damps noise."""
-    if amount <= 0:
-        return img
-    ycc = cv2.cvtColor(img, cv2.COLOR_RGB2YCrCb)
-    y = ycc[..., 0].astype(np.float32) / 255.0
-    pad = int(4 * amount) + 8
-    yp = cv2.copyMakeBorder(y, pad, pad, pad, pad, cv2.BORDER_REFLECT_101)
-    fy = np.fft.fftfreq(yp.shape[0])[:, None]
-    fx = np.fft.fftfreq(yp.shape[1])[None, :]
-    if kind == "Motion":
-        n = max(3, int(round(3 * amount)) | 1)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            h1 = np.where(fx == 0, 1.0, np.sin(np.pi * n * fx) / (n * np.sin(np.pi * fx)))
-        H = np.broadcast_to(h1, yp.shape)
-    else:
-        H = np.exp(-2.0 * np.pi ** 2 * amount ** 2 * (fx ** 2 + fy ** 2))
-    X = np.fft.fft2(yp) * H / (H * H + k)
-    x = np.real(np.fft.ifft2(X))[pad:-pad, pad:-pad]
-    ycc[..., 0] = np.clip(x * 255.0 + 0.5, 0, 255).astype(np.uint8)
-    return cv2.cvtColor(ycc, cv2.COLOR_YCrCb2RGB)
-
-
-def apply_stage(name, img, P):
-    if name == "dcp":
-        return cached_dark_channel_prior(img, P["omega"], P["t0"], P["patch"]) if P["use_dcp"] else img
-    if name == "deblur":
-        return wiener_deblur(img, P["deblur"], P["deblur_kind"], P["deblur_k"])
-    if name == "smooth":
-        return adaptive_smoothing(img, P["smooth"])
-    if name == "sharpen":
-        return adaptive_sharpening(img, P["sharpen"])
-    if name == "hist":
-        return histogram_stretch(img, P["hist"])
-    if name == "freq":
-        return frequency_enhancement(img, P["freq"], P["cutoff"])
-    return tone_adjust(img, P["gamma"], P["sat"])
-
-
-def stage_active(name, P):
-    return {"dcp": P["use_dcp"], "deblur": P["deblur"] > 0, "smooth": P["smooth"] > 0,
-            "sharpen": P["sharpen"] > 0, "hist": P["hist"] > 0, "freq": P["freq"] > 0,
-            "tone": P["gamma"] != 1.0 or P["sat"] != 1.0}[name]
-
-
-def dehaze_pipeline(img, P):
-    for name in STAGE_ORDER:
-        img = apply_stage(name, img, P)
-    return img
 
 
 # ============================================================
 # SAMPLE SCENE, FOG SIMULATION, MEASUREMENTS, TEST IMAGES, PRESETS
 # ============================================================
-FOG_AIRLIGHT = np.array([216, 223, 229], dtype=np.float32)
-
-
-def make_sample_scene(w=640, h=400):
-    """Synthetic city street plus its depth map (0 = near, 1 = far), so fog can be
-    simulated with the real scattering model and the clear scene is known."""
-    k = w / 512.0
-    rnd = random.Random(11)
-    hz = int(h * 0.56)
-    img = np.zeros((h, w, 3), np.uint8)
-    depth = np.ones((h, w), np.float32)
-    t = np.linspace(0, 1, hz)[:, None, None]
-    img[:hz] = (np.array([58, 108, 176]) * (1 - t) + np.array([211, 227, 242]) * t).astype(np.uint8)
-    img[hz:] = (60, 63, 67)
-    depth[hz:] = np.linspace(0.74, 0.04, h - hz)[:, None]
-
-    def buildings(dv, col, wmin, wr, hmin, hr, x0, x1):
-        col = np.array(col, np.float32)
-        win = tuple(int(c) for c in (col * 0.5 + np.array([255, 235, 170]) * 0.5))
-        bx = x0
-        while bx < x1:
-            bw, bh = (wmin + rnd.random() * wr) * k, (hmin + rnd.random() * hr) * k
-            xa, xb, ya, yb = int(bx), int(bx + bw), int(hz - bh), hz + int(8 * k)
-            cv2.rectangle(img, (xa, ya), (xb, yb), tuple(int(c) for c in col), -1)
-            cv2.rectangle(depth, (xa, ya), (xb, yb), float(dv), -1)
-            for wy in range(ya + int(8 * k), hz - int(6 * k), int(12 * k)):
-                for wx in range(xa + int(5 * k), xb - int(6 * k), int(9 * k)):
-                    if rnd.random() > 0.45:
-                        cv2.rectangle(img, (wx, wy), (wx + int(4 * k), wy + int(6 * k)), win, -1)
-            bx += bw + (2 + rnd.random() * 4) * k
-
-    buildings(0.90, (109, 129, 150), 26, 50, 60, 110, int(-10 * k), w)
-    buildings(0.65, (78, 95, 114), 34, 50, 50, 150, int(-10 * k), w)
-    buildings(0.42, (53, 66, 79), 40, 40, 40, 170, int(-10 * k), w)
-    cv2.fillPoly(img, [np.array([[w * .46, hz], [w * .54, hz], [w * 1.1, h], [-w * .1, h]], np.int32)], (37, 39, 43))
-    for i in range(1, 9):
-        tt = i / 9
-        py, sw = hz + (h - hz) * tt * tt, (1 + tt * 10) * k
-        cv2.rectangle(img, (int(w / 2 - sw / 2), int(py)), (int(w / 2 + sw / 2), int(py + (2 + tt * 14) * k)),
-                      (232, 211, 74), -1)
-    buildings(0.12, (29, 36, 44), 70, 60, 170, 90, int(-20 * k), int(120 * k))
-    buildings(0.12, (29, 36, 44), 70, 60, 170, 90, int(w - 130 * k), int(w + 20 * k))
-    for cx, cy, sc, col in [(200, hz / k + 40, .6, (179, 38, 30)), (300, hz / k + 62, .9, (216, 216, 216)),
-                            (110, hz / k + 104, 1.3, (43, 95, 168)), (330, hz / k + 120, 1.5, (224, 162, 26))]:
-        x0, y0, s_ = int(cx * k), int(cy * k), sc * k
-        cv2.rectangle(img, (x0, y0), (int(x0 + 60 * s_), int(y0 + 16 * s_)), col, -1)
-        cv2.rectangle(img, (int(x0 + 12 * s_), int(y0 - 10 * s_)), (int(x0 + 48 * s_), int(y0 + s_)), col, -1)
-        for wx in (6, 44):
-            cv2.rectangle(img, (int(x0 + wx * s_), int(y0 + 13 * s_)), (int(x0 + (wx + 10) * s_), int(y0 + 20 * s_)), (17, 17, 17), -1)
-        cv2.rectangle(depth, (x0, int(y0 - 10 * s_)), (int(x0 + 60 * s_), int(y0 + 20 * s_)), 0.157, -1)
-    return img, depth
-
-
-@st.cache_data(show_spinner=False)
-def simulate_fog(img, depth, density):
-    """Atmospheric scattering model I = J·t + A·(1 − t), t = exp(−β·d). Photos have no depth
-    map, so depth is guessed to grow toward the top of the frame."""
-    h, w = img.shape[:2]
-    if depth is None:
-        depth = np.repeat(np.linspace(0.95, 0.15, h, dtype=np.float32)[:, None], w, axis=1)
-    t = np.exp(-float(density) * depth)[..., None]
-    return np.clip(img.astype(np.float32) * t + FOG_AIRLIGHT * (1 - t) + 0.5, 0, 255).astype(np.uint8)
-
-
-@st.cache_data(show_spinner=False)
-def simulate_blur(img, amount, kind):
-    """Camera blur: Gaussian, or horizontal motion (length = 3 x amount px)."""
-    if amount <= 0:
-        return img
-    if kind == "Motion":
-        n = max(3, int(round(3 * amount)) | 1)
-        kern = np.zeros((n, n), np.float32)
-        kern[n // 2, :] = 1.0 / n
-        return cv2.filter2D(img, -1, kern, borderType=cv2.BORDER_REFLECT_101)
-    return cv2.GaussianBlur(img, (0, 0), float(amount))
-
-
-def edge_maps(a, b):
-    """Sobel gradient magnitude of both images on one shared scale."""
-    def mag(img):
-        L = _lum(img)
-        return np.hypot(cv2.Sobel(L, cv2.CV_32F, 1, 0, ksize=3), cv2.Sobel(L, cv2.CV_32F, 0, 1, ksize=3))
-    ma, mb = mag(a), mag(b)
-    top = max(float(np.percentile(np.concatenate([ma.ravel(), mb.ravel()]), 99.5)), 1e-6)
-    return [np.clip(m / top * 255.0, 0, 255).astype(np.uint8) for m in (ma, mb)]
 
 
 def compare_composite(a, b, pos):
@@ -359,42 +80,6 @@ def compare_composite(a, b, pos):
     if 0 < x < w:
         out[:, max(0, x - 1):min(w, x + 1)] = (211, 47, 47)
     return out
-
-
-def _lum(img):
-    return cv2.cvtColor(img, cv2.COLOR_RGB2GRAY).astype(np.float32)
-
-
-def quality_metrics(img):
-    """No-reference measures of how much structure an image shows."""
-    L = _lum(img)
-    hist = np.bincount(L.astype(np.uint8).ravel(), minlength=256).astype(np.float64)
-    p = hist / hist.sum()
-    p = p[p > 0]
-    mag = np.hypot(L[:-1, 1:] - L[:-1, :-1], L[1:, :-1] - L[:-1, :-1])
-    chans = [np.bincount(img[..., c].ravel(), minlength=256).astype(np.float64) for c in range(3)]
-    return {"contrast": float(L.std()), "entropy": float(-(p * np.log2(p)).sum()),
-            "gradient": float(mag.mean()), "edges": float(100.0 * (mag > 12).mean()),
-            "hist": hist, "chans": chans}
-
-
-def psnr(a, b):
-    mse = float(np.mean((a.astype(np.float32) - b.astype(np.float32)) ** 2))
-    return 99.0 if mse < 1e-6 else 10.0 * math.log10(255.0 ** 2 / mse)
-
-
-def ssim(a, b):
-    """Mean structural similarity on luminance (11x11 Gaussian window)."""
-    x, y = _lum(a), _lum(b)
-    c1, c2 = (0.01 * 255) ** 2, (0.03 * 255) ** 2
-
-    def g(z):
-        return cv2.GaussianBlur(z, (11, 11), 1.5)
-
-    mx, my = g(x), g(y)
-    sxx, syy, sxy = g(x * x) - mx * mx, g(y * y) - my * my, g(x * y) - mx * my
-    s = ((2 * mx * my + c1) * (2 * sxy + c2)) / ((mx * mx + my * my + c1) * (sxx + syy + c2))
-    return float(s.mean())
 
 
 def hist_svg(series, w=520, h=150, label="Histogram"):
@@ -434,24 +119,38 @@ def _read_rgb(path, size=None):
     return resize_max(arr)
 
 
-_BASE = dict(dcp_omega=0.95, dcp_t0=0.15, dcp_patch=0, freq_cutoff=FREQ_CUTOFF, tone_gamma=1.0, tone_sat=1.0,
-             deblur_amount=0.0, deblur_kind="Gaussian", deblur_k=0.01)
+# Balanced (default) comes from a parameter search on the outdoor test scenes that have a clear
+# reference (see evaluate.py and README); the numbers live in dehaze_core.P_BALANCED. The other
+# presets are hand-set around it.
+def _ui(P):
+    """Core settings -> the names used by the app's widgets."""
+    return dict(hist_strength=P["hist"], freq_strength=P["freq"], smooth_strength=P["smooth"],
+                sharpen_strength=P["sharpen"], dcp_omega=P["omega"], dcp_t0=P["t0"], dcp_patch=P["patch"],
+                freq_cutoff=P["cutoff"], tone_gamma=P["gamma"], tone_sat=P["sat"], tone_balance=P["balance"],
+                deblur_amount=P["deblur"], deblur_kind=P["deblur_kind"], deblur_k=P["deblur_k"],
+                use_dcp=P["use_dcp"], modules_only=False)
+
+
+_BASE = _ui(P_BALANCED)
 PRESETS = {
-    "Balanced (default)": dict(hist_strength=55, freq_strength=55, smooth_strength=50, sharpen_strength=50, **_BASE),
-    "Light haze": dict(hist_strength=40, freq_strength=35, smooth_strength=40, sharpen_strength=40,
-                       **{**_BASE, "dcp_omega": 0.85, "dcp_t0": 0.25, "tone_sat": 1.05}),
-    "Dense fog": dict(hist_strength=65, freq_strength=60, smooth_strength=55, sharpen_strength=55,
-                      **{**_BASE, "dcp_t0": 0.12, "tone_gamma": 1.1, "tone_sat": 1.1}),
-    "Real foggy photo": dict(hist_strength=55, freq_strength=50, smooth_strength=45, sharpen_strength=45,
-                             **{**_BASE, "tone_sat": 1.1}),
-    "Maximum detail": dict(hist_strength=80, freq_strength=80, smooth_strength=35, sharpen_strength=75,
-                           **{**_BASE, "dcp_omega": 0.97, "dcp_t0": 0.10, "tone_gamma": 1.1, "tone_sat": 1.1}),
+    "Balanced (default)": dict(_BASE),
+    "Light haze": {**_BASE, "hist_strength": 15, "freq_strength": 15, "smooth_strength": 20,
+                   "sharpen_strength": 25, "dcp_omega": 0.80, "dcp_t0": 0.25},
+    "Dense fog": {**_BASE, "hist_strength": 35, "freq_strength": 30, "smooth_strength": 30,
+                  "sharpen_strength": 45, "dcp_omega": 0.95, "dcp_t0": 0.12},
+    "Maximum detail": {**_BASE, "hist_strength": 45, "freq_strength": 40, "smooth_strength": 35,
+                       "sharpen_strength": 55, "dcp_omega": 0.95, "dcp_t0": 0.12},
+    "Fog removal only": {**_BASE, "hist_strength": 0, "freq_strength": 0, "smooth_strength": 0, "sharpen_strength": 0},
+    "Course modules only": {**_ui(P_MODULES), "use_dcp": True, "modules_only": True},
 }
 
 
 @st.cache_data(show_spinner=False, max_entries=6)
 def run_pipeline(img, P):
-    return dehaze_pipeline(img, P)
+    """(dehazed image, seconds it took)"""
+    t = time.perf_counter()
+    out = dehaze_pipeline(img, P)
+    return out, time.perf_counter() - t
 
 
 @st.cache_data(show_spinner=False, max_entries=3)
@@ -1187,7 +886,7 @@ def inject_css():
 # APP
 # ============================================================
 
-st.set_page_config(page_title="Urban Fog Cleaner", page_icon="🌫️", layout="wide")
+st.set_page_config(page_title="Dehaze App", page_icon="🌫️", layout="wide")
 inject_css()
 st.markdown(
     """
@@ -1199,7 +898,7 @@ st.markdown(
     .st-key-pipeline_card [data-testid="stToggle"] label p,
     .st-key-pipeline_card [data-testid="stCheckbox"] label p { font-size: .95rem; }
     .st-key-upload_card [data-testid="stSegmentedControl"] { margin-bottom: .2rem; }
-    .st-key-method_card { padding: 1.5rem 1.75rem; margin-top: 1.2rem; }
+    .st-key-method_card, .st-key-batch_card { padding: 1.5rem 1.75rem; margin-top: 1.2rem; }
     table.ufc-m { width: 100%; border-collapse: collapse; }
     table.ufc-m th, table.ufc-m td { text-align: right; padding: .4rem .3rem; border-bottom: 1px solid rgba(0,0,0,.08); }
     table.ufc-m th { font-weight: 600; font-size: .85rem; color: #777; }
@@ -1208,6 +907,10 @@ st.markdown(
     table.ufc-m td b { color: #d32f2f; font-weight: 600; }
     .ufc-cap { font-size: .85rem; color: #777; margin: 0 0 .4rem; }
     .ufc-eq { font-family: 'IBM Plex Mono', monospace; font-size: 1.05rem; }
+    @media (max-width: 1000px) {
+        .pipeline-heading { font-size: 1.45rem !important; word-break: normal !important;
+                            overflow-wrap: normal !important; hyphens: none !important; }
+    }
     /* Method card: both columns start on the same line, same line height, indented paragraphs,
        hanging indent on the references */
     .st-key-method_card [data-testid="stMarkdownContainer"] p { margin: 0 0 .8rem; line-height: 1.65;
@@ -1232,7 +935,7 @@ STAGE_LABELS = ["01 Dark Channel", "02 Deblur", "05 Smoothing", "06 Sharpening",
 for _k, _v in {"source_key": None, "source_img": None, "source_depth": None, "reference": None,
                "pre_foggy": True, "fog_density": 1.6, "upload_round": 0, "upload_error": None,
                "use_dcp": True, "source_choice": PLACEHOLDER, "blur_amount": 0.0, "blur_kind": "Gaussian",
-               "modules_only": False, "ref_raw": None, "ref_key": None, "ref_sig": None, "preset_choice": "Balanced (default)",
+               "preset_choice": "Balanced (default)",
                **PRESETS["Balanced (default)"]}.items():
     st.session_state.setdefault(_k, _v)
 
@@ -1251,6 +954,7 @@ def _apply_reset():
     st.session_state.sharpen_strength = 0
     st.session_state.tone_gamma = 1.0
     st.session_state.tone_sat = 1.0
+    st.session_state.tone_balance = 0
     st.session_state.deblur_amount = 0.0
 
 
@@ -1284,7 +988,8 @@ def current_params():
                 sharpen=ss.sharpen_strength, omega=ss.dcp_omega, t0=ss.dcp_t0, patch=ss.dcp_patch,
                 use_dcp=bool(ss.use_dcp and not only), deblur=0.0 if only else ss.deblur_amount,
                 deblur_kind=ss.deblur_kind, deblur_k=ss.deblur_k,
-                gamma=1.0 if only else ss.tone_gamma, sat=1.0 if only else ss.tone_sat, cutoff=ss.freq_cutoff)
+                gamma=1.0 if only else ss.tone_gamma, sat=1.0 if only else ss.tone_sat,
+                balance=0 if only else ss.tone_balance, cutoff=ss.freq_cutoff)
 
 
 has_image = st.session_state.source_img is not None
@@ -1381,7 +1086,7 @@ with left_col:
                            "to the original.")
 
             with st.spinner("Processing…"):
-                result = run_pipeline(hazy, P)
+                result, proc_s = run_pipeline(hazy, P)
 
             with st.container(key="preview_images"):
                 if view == "Side by side":
@@ -1426,12 +1131,8 @@ with left_col:
             st.markdown('<div class="card-heading" style="font-size:1.5rem;margin-top:1.4rem">Measurements</div>',
                         unsafe_allow_html=True)
             m0, m1 = quality_metrics(hazy), quality_metrics(result)
-            if not st.session_state.pre_foggy:
-                ref = raw      # fog and blur were simulated on this clear photo, so it is the reference
-            elif st.session_state.ref_raw is not None and st.session_state.ref_key == st.session_state.source_key:
-                ref = cv2.resize(st.session_state.ref_raw, (hazy.shape[1], hazy.shape[0]), interpolation=cv2.INTER_AREA)
-            else:
-                ref = None
+            # Only when fog (and blur) were simulated is there a clear reference: the photo itself.
+            ref = raw if not st.session_state.pre_foggy else None
 
             def _row(name, a, b, d):
                 return f"<tr><td>{name}</td><td>{a:.{d}f}</td><td><b>{b:.{d}f}</b></td></tr>"
@@ -1443,15 +1144,22 @@ with left_col:
             if ref is not None:
                 rows += (_row("PSNR vs. clear (dB)", psnr(hazy, ref), psnr(result, ref), 1)
                          + _row("SSIM vs. clear", ssim(hazy, ref), ssim(result, ref), 3))
-            c_tab, c_h1, c_h2 = st.columns([1.15, 1, 1], gap="medium")
+            rows += f"<tr><td>Processing time (s)</td><td>&ndash;</td><td><b>{proc_s:.2f}</b></td></tr>"
+            st.markdown(
+                '<p class="ufc-cap">Structure visibility: edge pixels '
+                f'{m0["edges"]:.1f}% &rarr; {m1["edges"]:.1f}% &middot; mean gradient &times;'
+                f'{m1["gradient"] / max(m0["gradient"], 1e-3):.1f} &middot; contrast &times;'
+                f'{m1["contrast"] / max(m0["contrast"], 1e-3):.1f}</p>',
+                unsafe_allow_html=True)
+            c_tab, c_h = st.columns([1, 1.1], gap="medium")
             c_tab.markdown(f'<table class="ufc-m"><tr><th></th><th>Original</th><th>Dehazed</th></tr>{rows}</table>',
                            unsafe_allow_html=True)
-            c_h1.markdown(
+            c_h.markdown(
                 '<p class="ufc-cap">Brightness histogram: original (grey), dehazed (red)</p>'
                 + hist_svg([(m0["hist"], "#9a9a9a", False), (m1["hist"], "#d32f2f", False)], label="Brightness histograms"),
                 unsafe_allow_html=True)
             chan = ["#e53935", "#43a047", "#1e88e5"]
-            c_h2.markdown(
+            c_h.markdown(
                 '<p class="ufc-cap">R, G, B histograms: original (dashed), dehazed (solid)</p>'
                 + hist_svg([(m0["chans"][c], chan[c], True) for c in range(3)]
                            + [(m1["chans"][c], chan[c], False) for c in range(3)], label="Colour channel histograms"),
@@ -1496,25 +1204,6 @@ with right_col:
             st.slider("Blur amount", 0.0, 10.0, step=0.5, key="blur_amount",
                       disabled=st.session_state.pre_foggy, label_visibility="collapsed")
             st.selectbox("Blur type", ["Gaussian", "Motion"], key="blur_kind", disabled=st.session_state.pre_foggy)
-            if st.session_state.pre_foggy and has_image:
-                with st.expander("Compare with a clear photo (optional)"):
-                    ref_up = st.file_uploader(
-                        "Clear reference photo", label_visibility="collapsed",
-                        key=f"ref_up_{abs(hash(str(st.session_state.source_key))) % 10**8}")
-                    if ref_up is not None:
-                        sig = f"{ref_up.name}-{ref_up.size}"
-                        if st.session_state.ref_sig != sig or st.session_state.ref_key != st.session_state.source_key:
-                            try:
-                                st.session_state.ref_raw = load_photo(ref_up)
-                                st.session_state.ref_key = st.session_state.source_key
-                                st.session_state.ref_sig = sig
-                                st.rerun()
-                            except Exception as exc:
-                                st.error(unreadable_message(ref_up.name, exc))
-                    elif st.session_state.ref_raw is not None and st.session_state.ref_key == st.session_state.source_key:
-                        st.session_state.ref_raw = None
-                        st.session_state.ref_sig = None
-                        st.rerun()
             st.toggle("Course modules only (skip dark channel, deblur and tone)", key="modules_only")
 
         # Stage 01 — Dark Channel Prior
@@ -1571,11 +1260,13 @@ with right_col:
 
         # Stage 06 — Final Tone
         with st.container(key="stage_tone"):
-            st.markdown(_stage_row("07", "Final Tone", "gamma · saturation"), unsafe_allow_html=True)
+            st.markdown(_stage_row("07", "Final Tone", ""), unsafe_allow_html=True)
             st.markdown(_param_row("Gamma", f"{st.session_state.tone_gamma:.2f}"), unsafe_allow_html=True)
             st.slider("Gamma", 0.60, 1.60, step=0.05, key="tone_gamma", label_visibility="collapsed")
             st.markdown(_param_row("Saturation", f"{st.session_state.tone_sat:.2f}"), unsafe_allow_html=True)
             st.slider("Saturation", 0.50, 2.00, step=0.05, key="tone_sat", label_visibility="collapsed")
+            st.markdown(_param_row("Colour balance", f"{st.session_state.tone_balance}"), unsafe_allow_html=True)
+            st.slider("Colour balance", 0, 100, key="tone_balance", label_visibility="collapsed")
 
         with st.container(key="pipeline_actions"):
             st.selectbox("Preset", list(PRESETS), key="preset_choice", on_change=_apply_preset)
@@ -1598,6 +1289,50 @@ with right_col:
 # ------------------------------------------------------------
 _, lower_col, _ = st.columns(PAGE_SPLIT, gap="large")
 with lower_col:
+    with st.container(border=True, key="batch_card"):
+        st.markdown('<div class="card-heading">Batch Processing</div>', unsafe_allow_html=True)
+        st.markdown('<p class="ufc-cap">Run several photos through the pipeline with the current settings, '
+                    'for example frames from a traffic camera or site-inspection photos. Every photo is '
+                    'treated as already foggy.</p>', unsafe_allow_html=True)
+        batch_files = st.file_uploader("Photos to process", accept_multiple_files=True,
+                                       key="batch_up", label_visibility="collapsed")
+        if batch_files and st.button("Process batch", type="primary"):
+            P_b, results, bar = current_params(), [], st.progress(0.0)
+            for i, f in enumerate(batch_files):
+                try:
+                    img_b = load_photo(f)
+                except Exception as exc:
+                    results.append({"name": f.name, "error": unreadable_message(f.name, exc)})
+                else:
+                    t_b = time.perf_counter()
+                    out_b = dehaze_pipeline(img_b, P_b)
+                    sec = time.perf_counter() - t_b
+                    q0, q1 = quality_metrics(img_b), quality_metrics(out_b)
+                    results.append({"name": f.name, "size": f"{img_b.shape[1]}x{img_b.shape[0]}", "sec": sec,
+                                    "contrast": q1["contrast"] / max(q0["contrast"], 1e-3),
+                                    "edges": q1["edges"] / max(q0["edges"], 1e-3), "png": to_png_bytes(out_b)})
+                bar.progress((i + 1) / len(batch_files))
+            bar.empty()
+            st.session_state.batch_results = results
+        done = [r for r in st.session_state.get("batch_results", []) if "png" in r]
+        for r in st.session_state.get("batch_results", []):
+            if "error" in r:
+                st.error(r["error"])
+        if done:
+            body = "".join(f"<tr><td>{r['name']}</td><td>{r['size']}</td><td>{r['sec']:.2f}</td>"
+                           f"<td>{r['contrast']:.2f}</td><td>{r['edges']:.2f}</td></tr>" for r in done)
+            st.markdown('<table class="ufc-m"><tr><th>Photo</th><th>Size</th><th>Time (s)</th>'
+                        f'<th>Contrast &times;</th><th>Edge pixels &times;</th></tr>{body}</table>',
+                        unsafe_allow_html=True)
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for r in done:
+                    zf.writestr(f"dehazed_{Path(r['name']).stem}.png", r["png"])
+                zf.writestr("batch_results.csv", "photo,size,seconds,contrast_x,edge_pixels_x\n" + "".join(
+                    f"{r['name']},{r['size']},{r['sec']:.3f},{r['contrast']:.3f},{r['edges']:.3f}\n" for r in done))
+            st.download_button("Download all as ZIP", data=buf.getvalue(), file_name="dehazed_batch.zip",
+                               mime="application/zip")
+
     with st.container(border=True, key="method_card"):
         st.markdown('<div class="card-heading">Method</div>', unsafe_allow_html=True)
         st.markdown('<p class="ufc-eq">I = J·t + A·(1 − t),&nbsp; t = e<sup>−βd</sup></p>', unsafe_allow_html=True)
@@ -1620,9 +1355,11 @@ with lower_col:
         )
         m_l.markdown(
             "When fog and blur are simulated on a clear photo, that photo is the reference for PSNR and "
-            "SSIM; for a real foggy photo you can add a clear one. Depth for simulated fog is assumed to "
+            "SSIM. Depth for simulated fog is assumed to "
             "grow toward the top of the frame. Contrast, entropy and gradient rise when structure becomes "
-            "visible, but also when an image is over-sharpened, so judge them together with the picture."
+            "visible, but also when an image is over-sharpened, so judge them together with the picture. "
+            "The default settings come from a parameter search on the bundled test scenes; evaluate.py "
+            "reproduces the numbers."
         )
         m_r.markdown('<p class="ufc-sub">References</p>', unsafe_allow_html=True)
         m_r.markdown(
