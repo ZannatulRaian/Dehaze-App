@@ -267,4 +267,4 @@ Dehaze-App/
 
 ## Author
 
-**Zannatul Raian** · [@ZannatulRaian](https://github.com/ZannatulRaian)
+[ZannatulRaian](https://github.com/ZannatulRaian)
