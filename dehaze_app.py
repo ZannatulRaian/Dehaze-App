@@ -955,6 +955,8 @@ for _k, _v in {"source_key": None, "source_img": None, "source_depth": None, "re
                "preset_choice": "Balanced (default)", "blur_angle": 0.0,
                **PRESETS["Balanced (default)"]}.items():
     st.session_state.setdefault(_k, _v)
+if st.session_state.pop("_reset_source_choice", False):     # must happen before the selectbox is created
+    st.session_state.source_choice = PLACEHOLDER
 
 
 def _apply_auto_enhance():
@@ -1077,7 +1079,7 @@ with left_col:
                     st.session_state.source_depth = None
                     st.session_state.reference = None
                     st.session_state.pre_foggy = True
-                    st.session_state.source_choice = PLACEHOLDER
+                    st.session_state._reset_source_choice = True
                 st.rerun()
             if st.session_state.upload_error:
                 st.error(st.session_state.upload_error)
@@ -1117,7 +1119,7 @@ with left_col:
                 if st.button("Change Image", width="stretch"):
                     st.session_state.source_img = None
                     st.session_state.source_key = None
-                    st.session_state.source_choice = PLACEHOLDER
+                    st.session_state._reset_source_choice = True
                     st.rerun()
 
             st.segmented_control("View", VIEWS, default="Side by side", key="view_mode",
