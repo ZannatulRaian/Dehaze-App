@@ -1,0 +1,331 @@
+scene,method,psnr,ssim,contrast_x,edges_pct,vis_e,vis_r,vis_clip,seconds,canny_pct,lines,lines_vertical,lines_oblique,edge_f1,edge_f1_auto,line_recall,dataset,beta
+scene03,Foggy input (no processing),18.6792,0.9167,1.0,19.6151,0.0,1.0,0.0,0.0029,1.3313,28,17,3,0.6989,0.3261,0.3867,7 garden photos,0.4
+scene03,Full pipeline (Balanced default),20.6893,0.7962,1.4623,33.277,0.2636,2.5023,0.0134,0.1268,10.9725,544,126,126,0.3912,0.7099,0.6933,7 garden photos,0.4
+scene03,"Full pipeline, strength set from the haze level",24.7857,0.9208,1.378,28.4951,0.1527,1.722,0.0044,0.1789,6.2411,325,123,53,0.5874,0.8361,0.7733,7 garden photos,0.4
+scene07,Foggy input (no processing),17.5898,0.872,1.0,23.9629,0.0,1.0,0.0,0.0031,1.7529,20,4,5,0.7039,0.4775,0.3922,7 garden photos,0.4
+scene07,Full pipeline (Balanced default),18.8486,0.735,2.0454,52.6614,0.3592,2.8305,0.0164,0.129,14.249,841,10,249,0.3897,0.6951,0.5686,7 garden photos,0.4
+scene07,"Full pipeline, strength set from the haze level",16.9441,0.7873,1.9354,47.2928,0.3052,2.2735,0.0047,0.1824,11.3439,584,13,138,0.4605,0.8386,0.5098,7 garden photos,0.4
+scene10,Foggy input (no processing),19.3757,0.9119,1.0,33.1677,0.0,1.0,0.0,0.0049,4.5628,253,20,177,0.7505,0.5281,0.2747,7 garden photos,0.4
+scene10,Full pipeline (Balanced default),20.1125,0.8015,1.3165,50.7994,0.2104,2.3551,0.013,0.1785,15.0824,1880,306,1140,0.7119,0.7673,0.5171,7 garden photos,0.4
+scene10,"Full pipeline, strength set from the haze level",25.234,0.9249,1.2731,44.1494,0.1067,1.6163,0.0045,0.2604,11.3526,1317,198,807,0.8226,0.8945,0.5461,7 garden photos,0.4
+scene11,Foggy input (no processing),19.0141,0.9233,1.0,56.1689,0.0,1.0,0.0,0.0039,5.2963,202,17,32,0.7505,0.5029,0.2896,7 garden photos,0.4
+scene11,Full pipeline (Balanced default),19.9925,0.807,1.649,74.0286,0.0704,2.2424,0.0079,0.1351,20.9655,1875,49,735,0.6392,0.674,0.5375,7 garden photos,0.4
+scene11,"Full pipeline, strength set from the haze level",26.7589,0.962,1.3311,66.4982,0.0311,1.4797,0.0009,0.1921,13.7186,1018,32,260,0.7903,0.8295,0.5479,7 garden photos,0.4
+scene12,Foggy input (no processing),18.453,0.9063,1.0,44.8293,0.0,1.0,0.0,0.0042,3.67,189,23,16,0.7459,0.5373,0.3881,7 garden photos,0.4
+scene12,Full pipeline (Balanced default),20.2747,0.7927,1.6579,67.4552,0.1139,2.306,0.0081,0.1675,19.3454,2333,180,1350,0.5178,0.478,0.5552,7 garden photos,0.4
+scene12,"Full pipeline, strength set from the haze level",24.4126,0.9132,1.4623,60.5471,0.0731,1.6911,0.0018,0.2366,13.3798,1260,87,514,0.6521,0.7065,0.5666,7 garden photos,0.4
+scene14,Foggy input (no processing),21.8934,0.9638,1.0,32.731,0.0,1.0,0.0,0.0041,3.4956,204,30,44,0.8319,0.6161,0.538,7 garden photos,0.4
+scene14,Full pipeline (Balanced default),16.5623,0.7615,1.7722,52.3724,0.163,2.4183,0.0152,0.1445,10.6329,1002,49,368,0.6604,0.5409,0.6582,7 garden photos,0.4
+scene14,"Full pipeline, strength set from the haze level",19.9564,0.8594,1.6936,49.2243,0.1341,2.0381,0.0087,0.2055,9.4432,811,39,236,0.7102,0.6374,0.6203,7 garden photos,0.4
+scene15,Foggy input (no processing),18.6447,0.9261,1.0,18.9538,0.0,1.0,0.0,0.0035,2.3425,72,7,31,0.7643,0.6559,0.4562,7 garden photos,0.4
+scene15,Full pipeline (Balanced default),18.2908,0.799,1.7816,31.5952,0.2556,2.1439,0.0059,0.1327,6.9207,363,36,98,0.7316,0.5961,0.8438,7 garden photos,0.4
+scene15,"Full pipeline, strength set from the haze level",22.7462,0.9222,1.6118,28.469,0.1844,1.713,0.0007,0.1895,5.6749,296,23,91,0.8158,0.7601,0.875,7 garden photos,0.4
+scene03,Foggy input (no processing),13.7469,0.8044,1.0,14.6376,0.0,1.0,0.0,0.0029,0.7037,11,6,2,0.4429,0.1004,0.16,7 garden photos,0.8
+scene03,Full pipeline (Balanced default),21.6128,0.8199,1.398,32.054,0.4804,3.0308,0.0112,0.1219,10.5782,516,118,126,0.4027,0.7361,0.72,7 garden photos,0.8
+scene03,"Full pipeline, strength set from the haze level",21.7142,0.8899,1.4111,27.3032,0.3503,2.2596,0.0103,0.1723,6.7535,338,103,74,0.5537,0.8522,0.6933,7 garden photos,0.8
+scene07,Foggy input (no processing),12.6752,0.7428,1.0,17.4255,0.0,1.0,0.0,0.0029,0.6902,3,0,0,0.3572,0.0582,0.098,7 garden photos,0.8
+scene07,Full pipeline (Balanced default),18.3673,0.7596,1.7931,49.8684,0.6493,3.2342,0.0119,0.1212,13.1484,744,10,194,0.4155,0.7384,0.6471,7 garden photos,0.8
+scene07,"Full pipeline, strength set from the haze level",15.2364,0.771,1.7985,44.3931,0.5709,2.6668,0.0071,0.1737,10.7137,516,12,95,0.4818,0.8934,0.6471,7 garden photos,0.8
+scene10,Foggy input (no processing),14.459,0.811,1.0,27.0901,0.0,1.0,0.0,0.0048,2.2301,94,3,69,0.4685,0.102,0.1007,7 garden photos,0.8
+scene10,Full pipeline (Balanced default),20.4794,0.8051,1.4298,49.9615,0.3714,2.8314,0.0114,0.178,14.8513,1843,350,1035,0.7172,0.7875,0.5068,7 garden photos,0.8
+scene10,"Full pipeline, strength set from the haze level",20.1881,0.8743,1.4214,43.8522,0.2519,2.1143,0.0073,0.2585,12.2513,1484,230,888,0.7928,0.8886,0.5478,7 garden photos,0.8
+scene11,Foggy input (no processing),14.1543,0.8267,1.0,47.4419,0.0,1.0,0.0,0.0031,2.8045,71,11,4,0.5003,0.1275,0.1042,7 garden photos,0.8
+scene11,Full pipeline (Balanced default),20.534,0.8154,1.8916,73.3194,0.1697,2.7182,0.0059,0.13,20.6593,1850,50,755,0.6453,0.6928,0.5271,7 garden photos,0.8
+scene11,"Full pipeline, strength set from the haze level",21.9857,0.9092,1.5942,66.2774,0.1204,2.0004,0.0021,0.1816,15.5798,1306,40,405,0.7476,0.8258,0.5188,7 garden photos,0.8
+scene12,Foggy input (no processing),13.6329,0.8182,1.0,36.0714,0.0,1.0,0.0,0.0037,2.3498,122,8,11,0.5659,0.2828,0.255,7 garden photos,0.8
+scene12,Full pipeline (Balanced default),20.5162,0.7934,1.9826,66.3859,0.2453,2.7708,0.007,0.162,18.8513,2220,216,1237,0.5267,0.5067,0.4419,7 garden photos,0.8
+scene12,"Full pipeline, strength set from the haze level",20.6588,0.8586,1.7574,60.2796,0.1945,2.209,0.0035,0.2295,14.622,1512,116,581,0.6183,0.6753,0.4703,7 garden photos,0.8
+scene14,Foggy input (no processing),16.9039,0.8986,1.0,26.1995,0.0,1.0,0.0,0.003,1.8388,68,24,11,0.5571,0.1469,0.1994,7 garden photos,0.8
+scene14,Full pipeline (Balanced default),16.9606,0.7809,2.0305,51.5639,0.3068,2.8783,0.0104,0.1392,10.5968,964,29,306,0.6621,0.5629,0.6741,7 garden photos,0.8
+scene14,"Full pipeline, strength set from the haze level",18.793,0.8369,1.9836,49.2371,0.2776,2.5913,0.0092,0.2083,9.8647,861,47,263,0.6934,0.6164,0.6519,7 garden photos,0.8
+scene15,Foggy input (no processing),13.7459,0.8302,1.0,14.0731,0.0,1.0,0.0,0.0035,1.1535,24,0,14,0.4696,0.2004,0.1688,7 garden photos,0.8
+scene15,Full pipeline (Balanced default),18.1765,0.8047,1.9097,31.0319,0.54,2.7117,0.0039,0.1499,6.8277,351,29,89,0.7374,0.6016,0.8625,7 garden photos,0.8
+scene15,"Full pipeline, strength set from the haze level",20.2777,0.8836,1.8138,27.8598,0.4432,2.2782,0.001,0.227,5.9178,306,25,86,0.8,0.7267,0.9187,7 garden photos,0.8
+scene03,Foggy input (no processing),9.6835,0.6275,1.0,6.1041,0.0,1.0,0.0,0.0027,0.257,3,1,1,0.1873,0.0,0.0533,7 garden photos,1.6
+scene03,Full pipeline (Balanced default),20.0732,0.834,1.4637,28.6297,1.5646,4.3256,0.0153,0.1807,9.1609,449,134,117,0.4459,0.8149,0.64,7 garden photos,1.6
+scene03,"Full pipeline, strength set from the haze level",18.9534,0.8433,1.5007,26.9796,1.4771,3.953,0.0143,0.2004,7.5698,346,67,85,0.5147,0.8669,0.7467,7 garden photos,1.6
+scene07,Foggy input (no processing),8.6483,0.5687,1.0,9.5066,0.0,1.0,0.0,0.0042,0.0901,0,0,0,0.0539,0.0053,0.0,7 garden photos,1.6
+scene07,Full pipeline (Balanced default),14.9155,0.7677,1.662,42.2101,1.5009,4.0087,0.0102,0.1642,10.2976,507,6,109,0.4958,0.8905,0.5098,7 garden photos,1.6
+scene07,"Full pipeline, strength set from the haze level",14.0626,0.7628,1.6926,40.3903,1.44,3.7797,0.0093,0.1918,9.5621,423,8,72,0.5226,0.9217,0.6078,7 garden photos,1.6
+scene10,Foggy input (no processing),10.4117,0.6478,1.0,17.5314,0.0,1.0,0.0,0.0059,0.4893,6,0,0,0.1281,0.0,0.0,7 garden photos,1.6
+scene10,Full pipeline (Balanced default),18.4176,0.8013,1.6368,46.9455,0.7993,3.9076,0.0095,0.2032,13.9902,1669,317,1008,0.7434,0.8459,0.4625,7 garden photos,1.6
+scene10,"Full pipeline, strength set from the haze level",16.9975,0.8129,1.6523,44.1676,0.7137,3.4949,0.0119,0.2823,13.0182,1581,315,899,0.77,0.8776,0.4932,7 garden photos,1.6
+scene11,Foggy input (no processing),10.2257,0.6524,1.0,32.0871,0.0,1.0,0.0,0.0033,0.6065,10,0,2,0.1398,0.0059,0.0146,7 garden photos,1.6
+scene11,Full pipeline (Balanced default),19.4012,0.8184,2.0213,70.236,0.4741,3.8,0.0039,0.1468,19.252,1680,49,700,0.6736,0.7508,0.5062,7 garden photos,1.6
+scene11,"Full pipeline, strength set from the haze level",17.9069,0.8359,1.9087,66.3278,0.4286,3.3349,0.0033,0.2191,17.3588,1480,58,522,0.709,0.8096,0.5604,7 garden photos,1.6
+scene12,Foggy input (no processing),9.7778,0.6636,1.0,22.347,0.0,1.0,0.0,0.0039,1.2945,62,6,14,0.3653,0.0554,0.1501,7 garden photos,1.6
+scene12,Full pipeline (Balanced default),18.1626,0.7847,2.1502,62.5933,0.6569,3.8027,0.0069,0.194,16.9314,1923,196,848,0.5672,0.5908,0.4221,7 garden photos,1.6
+scene12,"Full pipeline, strength set from the haze level",17.4092,0.7925,2.0984,60.6527,0.6272,3.5879,0.0063,0.2287,15.8975,1753,122,739,0.5896,0.6394,0.5297,7 garden photos,1.6
+scene14,Foggy input (no processing),12.7571,0.7626,1.0,14.039,0.0,1.0,0.0,0.0037,0.3911,11,3,2,0.1528,0.0019,0.0285,7 garden photos,1.6
+scene14,Full pipeline (Balanced default),17.2686,0.8057,2.5257,49.6203,0.8683,4.0331,0.0101,0.1423,10.1699,917,31,244,0.6806,0.5989,0.6614,7 garden photos,1.6
+scene14,"Full pipeline, strength set from the haze level",17.2686,0.8057,2.5257,49.6203,0.8683,4.0331,0.0101,0.1384,10.1699,917,31,244,0.6806,0.5989,0.6614,7 garden photos,1.6
+scene15,Foggy input (no processing),9.7545,0.6786,1.0,6.6718,0.0,1.0,0.0,0.0032,0.2582,1,0,0,0.1287,0.0069,0.0,7 garden photos,1.6
+scene15,Full pipeline (Balanced default),17.9665,0.8203,1.9142,28.4364,1.3937,4.0777,0.0018,0.1306,6.2809,340,34,90,0.7692,0.6781,0.875,7 garden photos,1.6
+scene15,"Full pipeline, strength set from the haze level",17.9021,0.8241,1.9259,27.794,1.3518,3.9562,0.0016,0.1842,6.15,308,30,88,0.7777,0.693,0.8938,7 garden photos,1.6
+scene03,Foggy input (no processing),7.8658,0.5154,1.0,2.7386,0.0,1.0,0.0,0.0031,0.02,0,0,0,0.0162,0.0,0.0,7 garden photos,2.4
+scene03,Full pipeline (Balanced default),15.4061,0.8213,1.7745,23.8848,3.9886,5.5744,0.0117,0.1253,4.9288,212,59,41,0.6677,0.7949,0.7733,7 garden photos,2.4
+scene03,"Full pipeline, strength set from the haze level",15.4061,0.8213,1.7745,23.8848,3.9886,5.5744,0.0117,0.1208,4.9288,212,59,41,0.6677,0.7949,0.7733,7 garden photos,2.4
+scene07,Foggy input (no processing),6.8661,0.4648,1.0,5.767,0.0,1.0,0.0,0.0028,0.0753,0,0,0,0.0461,0.0,0.0,7 garden photos,2.4
+scene07,Full pipeline (Balanced default),11.4613,0.7393,1.9798,32.1453,2.2145,4.4745,0.0132,0.1308,6.9197,249,13,28,0.6239,0.817,0.5882,7 garden photos,2.4
+scene07,"Full pipeline, strength set from the haze level",11.4613,0.7393,1.9798,32.1453,2.2145,4.4745,0.0132,0.1263,6.9197,249,13,28,0.6239,0.817,0.5882,7 garden photos,2.4
+scene10,Foggy input (no processing),8.5943,0.5341,1.0,11.135,0.0,1.0,0.0,0.0052,0.1337,0,0,0,0.0375,0.0,0.0,7 garden photos,2.4
+scene10,Full pipeline (Balanced default),14.4119,0.786,1.9299,41.882,1.2546,4.9545,0.013,0.1817,12.5264,1517,236,950,0.777,0.8713,0.5546,7 garden photos,2.4
+scene10,"Full pipeline, strength set from the haze level",14.4119,0.786,1.9299,41.882,1.2546,4.9545,0.013,0.1951,12.5264,1517,236,950,0.777,0.8713,0.5546,7 garden photos,2.4
+scene11,Foggy input (no processing),8.5251,0.5211,1.0,20.9529,0.0,1.0,0.0,0.0032,0.2109,0,0,0,0.0511,0.0,0.0,7 garden photos,2.4
+scene11,Full pipeline (Balanced default),15.6396,0.8003,2.1278,65.1699,0.9456,5.0071,0.0038,0.1258,17.2756,1467,68,513,0.7039,0.81,0.5667,7 garden photos,2.4
+scene11,"Full pipeline, strength set from the haze level",15.6396,0.8003,2.1278,65.1699,0.9456,5.0071,0.0038,0.1256,17.2756,1467,68,513,0.7039,0.81,0.5667,7 garden photos,2.4
+scene12,Foggy input (no processing),8.1405,0.5449,1.0,13.6968,0.0,1.0,0.0,0.0043,0.6495,18,2,3,0.203,0.0161,0.0538,7 garden photos,2.4
+scene12,Full pipeline (Balanced default),13.9047,0.7613,2.267,56.3961,1.2276,4.8335,0.0063,0.1624,14.5861,1510,100,353,0.6092,0.6888,0.4703,7 garden photos,2.4
+scene12,"Full pipeline, strength set from the haze level",13.9047,0.7613,2.267,56.3961,1.2276,4.8335,0.0063,0.156,14.5861,1510,100,353,0.6092,0.6888,0.4703,7 garden photos,2.4
+scene14,Foggy input (no processing),10.8877,0.6567,1.0,5.7279,0.0,1.0,0.0,0.0037,0.0266,0,0,0,0.0124,0.0,0.0,7 garden photos,2.4
+scene14,Full pipeline (Balanced default),16.5554,0.8254,3.04,46.4394,2.4056,5.3058,0.0132,0.1379,8.945,776,34,255,0.7242,0.6984,0.6203,7 garden photos,2.4
+scene14,"Full pipeline, strength set from the haze level",16.5554,0.8254,3.04,46.4394,2.4056,5.3058,0.0132,0.1346,8.945,776,34,255,0.7242,0.6984,0.6203,7 garden photos,2.4
+scene15,Foggy input (no processing),8.008,0.5794,1.0,2.5869,0.0,1.0,0.0,0.0031,0.0499,0,0,0,0.0261,0.0,0.0,7 garden photos,2.4
+scene15,Full pipeline (Balanced default),15.4711,0.7925,2.2137,24.3608,3.417,5.7034,0.001,0.1444,5.5451,250,33,81,0.8127,0.8445,0.825,7 garden photos,2.4
+scene15,"Full pipeline, strength set from the haze level",15.4711,0.7925,2.2137,24.3608,3.417,5.7034,0.001,0.1254,5.5451,250,33,81,0.8127,0.8445,0.825,7 garden photos,2.4
+scene03,Foggy input (no processing),6.8602,0.4452,1.0,1.4229,0.0,1.0,0.0,0.0027,0.0,0,0,0,0.0,0.0,0.0,7 garden photos,3.2
+scene03,Full pipeline (Balanced default),11.357,0.7396,2.3241,16.0841,6.0435,6.0131,0.006,0.1261,3.4107,131,40,10,0.7234,0.4526,0.7333,7 garden photos,3.2
+scene03,"Full pipeline, strength set from the haze level",11.357,0.7396,2.3241,16.0841,6.0435,6.0131,0.006,0.116,3.4107,131,40,10,0.7234,0.4526,0.7333,7 garden photos,3.2
+scene07,Foggy input (no processing),5.8935,0.3993,1.0,3.8038,0.0,1.0,0.0,0.0027,0.0339,0,0,0,0.0219,0.0,0.0,7 garden photos,3.2
+scene07,Full pipeline (Balanced default),8.8241,0.6498,2.5265,21.6113,2.1234,4.1738,0.0131,0.1248,5.2933,170,6,21,0.6308,0.5893,0.4118,7 garden photos,3.2
+scene07,"Full pipeline, strength set from the haze level",8.8241,0.6498,2.5265,21.6113,2.1234,4.1738,0.0131,0.1186,5.2933,170,6,21,0.6308,0.5893,0.4118,7 garden photos,3.2
+scene10,Foggy input (no processing),7.5799,0.4562,1.0,6.6537,0.0,1.0,0.0,0.0045,0.0316,0,0,0,0.0091,0.0,0.0,7 garden photos,3.2
+scene10,Full pipeline (Balanced default),11.059,0.7364,2.405,35.2389,1.6566,5.7238,0.0127,0.1776,10.2224,1294,78,881,0.7553,0.7634,0.5222,7 garden photos,3.2
+scene10,"Full pipeline, strength set from the haze level",11.059,0.7364,2.405,35.2389,1.6566,5.7238,0.0127,0.1918,10.2224,1294,78,881,0.7553,0.7634,0.5222,7 garden photos,3.2
+scene11,Foggy input (no processing),7.6184,0.4277,1.0,14.0432,0.0,1.0,0.0,0.0031,0.0354,0,0,0,0.0085,0.0,0.0,7 garden photos,3.2
+scene11,Full pipeline (Balanced default),11.7858,0.7423,2.5056,57.4461,1.452,6.032,0.0039,0.1278,14.6108,1234,15,278,0.6942,0.757,0.4333,7 garden photos,3.2
+scene11,"Full pipeline, strength set from the haze level",11.7858,0.7423,2.5056,57.4461,1.452,6.032,0.0039,0.1302,14.6108,1234,15,278,0.6942,0.757,0.4333,7 garden photos,3.2
+scene12,Foggy input (no processing),7.2862,0.4587,1.0,8.4532,0.0,1.0,0.0,0.0053,0.3696,5,1,3,0.1233,0.0,0.0227,7 garden photos,3.2
+scene12,Full pipeline (Balanced default),10.5966,0.7138,2.7604,50.1014,1.9042,5.9638,0.0062,0.1669,12.558,1280,19,283,0.5834,0.7182,0.4391,7 garden photos,3.2
+scene12,"Full pipeline, strength set from the haze level",10.5966,0.7138,2.7604,50.1014,1.9042,5.9638,0.0062,0.1569,12.558,1280,19,283,0.5834,0.7182,0.4391,7 garden photos,3.2
+scene14,Foggy input (no processing),9.8522,0.5828,1.0,2.5161,0.0,1.0,0.0,0.0035,0.0,0,0,0,0.0,0.0,0.0,7 garden photos,3.2
+scene14,Full pipeline (Balanced default),14.3597,0.8087,3.6472,39.6491,5.5269,6.223,0.0116,0.1423,6.5294,467,24,67,0.7131,0.7298,0.4525,7 garden photos,3.2
+scene14,"Full pipeline, strength set from the haze level",14.3597,0.8087,3.6472,39.6491,5.5269,6.223,0.0116,0.1369,6.5294,467,24,67,0.7131,0.7298,0.4525,7 garden photos,3.2
+scene15,Foggy input (no processing),7.0685,0.5156,1.0,1.1798,0.0,1.0,0.0,0.003,0.023,0,0,0,0.0127,0.0,0.0,7 garden photos,3.2
+scene15,Full pipeline (Balanced default),11.7591,0.725,2.895,18.8689,6.8436,6.7458,0.0004,0.1384,3.8322,161,20,64,0.71,0.7647,0.55,7 garden photos,3.2
+scene15,"Full pipeline, strength set from the haze level",11.7591,0.725,2.895,18.8689,6.8436,6.7458,0.0004,0.1338,3.8322,161,20,64,0.71,0.7647,0.55,7 garden photos,3.2
+city01,Foggy input (no processing),21.8709,0.9484,1.0,6.9065,0.0,1.0,0.0,0.0016,5.3398,111,44,14,0.9584,0.9722,0.8067,synthetic streets,0.4
+city01,Full pipeline (Balanced default),18.7802,0.6895,1.3192,13.7119,0.6331,89.1501,0.0882,0.0684,5.7047,106,19,17,0.9399,0.8874,0.6639,synthetic streets,0.4
+city01,"Full pipeline, strength set from the haze level",25.6176,0.9431,1.235,6.9634,0.0262,1.5822,0.0013,0.0955,5.6352,120,65,16,0.9416,0.9819,0.7731,synthetic streets,0.4
+city02,Foggy input (no processing),21.6383,0.947,1.0,7.0725,0.0,1.0,0.0,0.0016,5.45,129,41,14,0.9836,0.9854,0.8214,synthetic streets,0.4
+city02,Full pipeline (Balanced default),18.5102,0.6898,1.3485,14.2759,0.7087,130.3675,0.0779,0.0659,5.7391,149,25,16,0.9822,0.869,0.8429,synthetic streets,0.4
+city02,"Full pipeline, strength set from the haze level",25.8229,0.9459,1.2401,7.0897,0.0188,1.5698,0.0013,0.0914,5.6289,142,41,14,0.9897,0.9608,0.85,synthetic streets,0.4
+city03,Foggy input (no processing),21.9684,0.9485,1.0,7.2603,0.0,1.0,0.0,0.0016,5.8832,139,56,14,0.9778,0.9697,0.8056,synthetic streets,0.4
+city03,Full pipeline (Balanced default),18.7133,0.6883,1.3841,14.9235,0.6666,106.7675,0.0929,0.0668,5.9828,147,20,15,0.9823,0.8876,0.7569,synthetic streets,0.4
+city03,"Full pipeline, strength set from the haze level",25.8532,0.9438,1.2516,7.2772,0.0193,1.5515,0.0013,0.0921,5.9094,158,53,14,0.9831,0.9914,0.7847,synthetic streets,0.4
+city04,Foggy input (no processing),21.5481,0.9468,1.0,6.8575,0.0,1.0,0.0,0.0016,5.2191,112,47,16,0.9506,0.9704,0.7983,synthetic streets,0.4
+city04,Full pipeline (Balanced default),18.5423,0.6931,1.3155,13.6884,0.7039,121.8062,0.077,0.0667,5.6137,125,24,17,0.9475,0.8581,0.7059,synthetic streets,0.4
+city04,"Full pipeline, strength set from the haze level",25.7852,0.9461,1.2315,6.8869,0.022,1.5537,0.0013,0.0947,5.5336,123,55,15,0.9522,0.957,0.8824,synthetic streets,0.4
+city05,Foggy input (no processing),22.0279,0.9484,1.0,6.6924,0.0,1.0,0.0,0.0016,4.9773,96,36,16,0.9483,0.9638,0.7816,synthetic streets,0.4
+city05,Full pipeline (Balanced default),18.8693,0.6889,1.3198,13.6107,0.6385,91.9189,0.0893,0.0706,5.4508,106,19,14,0.9241,0.8921,0.7241,synthetic streets,0.4
+city05,"Full pipeline, strength set from the haze level",25.9631,0.944,1.2347,6.745,0.0257,1.5411,0.0013,0.0957,5.359,115,48,16,0.9265,0.9895,0.7586,synthetic streets,0.4
+city06,Foggy input (no processing),21.7829,0.9474,1.0,7.3415,0.0,1.0,0.0,0.002,5.8238,135,46,12,0.9604,0.9847,0.7762,synthetic streets,0.4
+city06,Full pipeline (Balanced default),18.6008,0.6877,1.372,15.4102,0.7064,122.7687,0.0888,0.0723,6.0594,147,18,12,0.9741,0.8486,0.7692,synthetic streets,0.4
+city06,"Full pipeline, strength set from the haze level",25.7741,0.9435,1.2467,7.3588,0.0188,1.5416,0.0013,0.094,6.0102,159,55,17,0.975,0.9592,0.8531,synthetic streets,0.4
+city01,Foggy input (no processing),16.7202,0.8769,1.0,6.9011,0.0,1.0,0.0,0.0016,5.2594,111,43,18,0.9553,0.9559,0.8151,synthetic streets,0.8
+city01,Full pipeline (Balanced default),19.8734,0.7448,1.2792,14.9231,0.7963,140.3634,0.0829,0.0698,5.7707,106,20,19,0.9317,0.9107,0.6639,synthetic streets,0.8
+city01,"Full pipeline, strength set from the haze level",21.5568,0.8961,1.2613,6.9693,0.4291,26.7569,0.0025,0.0944,5.6926,118,67,16,0.9366,0.9582,0.7311,synthetic streets,0.8
+city02,Foggy input (no processing),16.462,0.873,1.0,7.0458,0.0,1.0,0.0,0.0017,5.5016,145,38,16,0.9711,0.9803,0.8143,synthetic streets,0.8
+city02,Full pipeline (Balanced default),19.6305,0.7486,1.3067,15.7275,0.8457,179.4337,0.0725,0.0689,5.8508,134,27,15,0.9692,0.897,0.7929,synthetic streets,0.8
+city02,"Full pipeline, strength set from the haze level",21.7933,0.9001,1.2664,7.227,0.4213,26.419,0.0026,0.0929,5.7957,160,45,19,0.9738,0.9755,0.8643,synthetic streets,0.8
+city03,Foggy input (no processing),16.7694,0.8767,1.0,7.2568,0.0,1.0,0.0,0.0017,5.943,154,54,16,0.9693,0.9678,0.8056,synthetic streets,0.8
+city03,Full pipeline (Balanced default),19.6746,0.7434,1.3413,15.9993,0.8215,164.3866,0.0873,0.0692,6.0578,152,23,11,0.97,0.926,0.7569,synthetic streets,0.8
+city03,"Full pipeline, strength set from the haze level",21.7875,0.8993,1.2774,7.3058,0.2981,12.997,0.0023,0.0927,6.0203,154,71,18,0.9728,0.9642,0.8125,synthetic streets,0.8
+city04,Foggy input (no processing),16.3906,0.8728,1.0,6.8477,0.0,1.0,0.0,0.0017,5.4344,123,57,17,0.9298,0.956,0.8151,synthetic streets,0.8
+city04,Full pipeline (Balanced default),19.7928,0.7519,1.2793,15.1835,0.848,178.2748,0.0715,0.071,5.7461,119,22,12,0.9339,0.8909,0.7563,synthetic streets,0.8
+city04,"Full pipeline, strength set from the haze level",21.7376,0.9016,1.2565,7.0399,0.4701,32.8609,0.0026,0.0959,5.6531,130,58,15,0.9411,0.9698,0.8739,synthetic streets,0.8
+city05,Foggy input (no processing),16.8467,0.8761,1.0,6.681,0.0,1.0,0.0,0.0022,5.1969,103,42,16,0.9297,0.944,0.7931,synthetic streets,0.8
+city05,Full pipeline (Balanced default),20.024,0.7459,1.2768,14.4049,0.7783,132.6657,0.0841,0.0859,5.5164,106,19,14,0.9158,0.8987,0.6897,synthetic streets,0.8
+city05,"Full pipeline, strength set from the haze level",21.8133,0.8992,1.2592,6.7504,0.3301,15.0463,0.0023,0.0931,5.3316,118,49,14,0.9296,0.9609,0.8046,synthetic streets,0.8
+city06,Foggy input (no processing),16.6025,0.8739,1.0,7.3364,0.0,1.0,0.0,0.0018,5.8664,134,48,16,0.9571,0.9673,0.7832,synthetic streets,0.8
+city06,Full pipeline (Balanced default),19.6251,0.744,1.3251,16.5986,0.8475,178.4487,0.0825,0.0688,6.1195,146,21,16,0.9673,0.8918,0.7762,synthetic streets,0.8
+city06,"Full pipeline, strength set from the haze level",21.6617,0.8964,1.2736,7.396,0.4197,26.1512,0.0025,0.097,6.118,150,52,13,0.9683,0.9721,0.8112,synthetic streets,0.8
+city01,Foggy input (no processing),12.2704,0.7578,1.0,6.8101,0.0,1.0,0.0,0.002,4.3691,83,52,14,0.863,0.8234,0.4874,synthetic streets,1.6
+city01,Full pipeline (Balanced default),19.3764,0.7899,1.2857,15.7561,1.1561,348.2159,0.0559,0.0773,5.8266,109,27,13,0.9223,0.943,0.6891,synthetic streets,1.6
+city01,"Full pipeline, strength set from the haze level",17.3043,0.8379,1.3053,10.8872,0.8222,125.9754,0.005,0.1065,5.7633,113,51,12,0.9282,0.9532,0.7563,synthetic streets,1.6
+city02,Foggy input (no processing),12.0015,0.75,1.0,6.9513,0.0,1.0,0.0,0.002,4.0344,76,30,14,0.827,0.7745,0.55,synthetic streets,1.6
+city02,Full pipeline (Balanced default),19.3913,0.7961,1.2993,16.4315,1.1438,371.084,0.0511,0.0715,5.95,130,28,12,0.9585,0.9273,0.8143,synthetic streets,1.6
+city02,"Full pipeline, strength set from the haze level",17.5305,0.8414,1.3024,10.8428,0.813,133.3245,0.0088,0.0976,5.9156,140,37,14,0.9579,0.9714,0.8714,synthetic streets,1.6
+city03,Foggy input (no processing),12.2596,0.757,1.0,7.1638,0.0,1.0,0.0,0.0019,4.9758,107,59,17,0.8669,0.8306,0.6042,synthetic streets,1.6
+city03,Full pipeline (Balanced default),19.3385,0.7906,1.316,17.2281,1.1632,383.0297,0.0591,0.0728,6.1195,149,24,18,0.9616,0.9617,0.7986,synthetic streets,1.6
+city03,"Full pipeline, strength set from the haze level",17.4782,0.8342,1.322,10.7511,0.8316,137.7449,0.0064,0.1001,6.1199,165,57,14,0.9627,0.9625,0.8611,synthetic streets,1.6
+city04,Foggy input (no processing),11.9587,0.751,1.0,6.7053,0.0,1.0,0.0,0.0019,4.3047,80,50,13,0.7972,0.8043,0.5546,synthetic streets,1.6
+city04,Full pipeline (Balanced default),19.4623,0.7968,1.2912,16.0707,1.1733,377.5316,0.0494,0.0732,5.8496,121,26,17,0.9214,0.9216,0.7815,synthetic streets,1.6
+city04,"Full pipeline, strength set from the haze level",17.4961,0.8376,1.3023,10.5534,0.8897,157.5943,0.0066,0.0948,5.7141,123,51,15,0.9209,0.9608,0.8319,synthetic streets,1.6
+city05,Foggy input (no processing),12.3524,0.7554,1.0,6.5724,0.0,1.0,0.0,0.0019,4.4965,82,50,14,0.8271,0.8455,0.5977,synthetic streets,1.6
+city05,Full pipeline (Balanced default),19.7068,0.7949,1.271,15.18,1.1406,334.955,0.0562,0.0692,5.6379,102,17,13,0.9036,0.9461,0.7586,synthetic streets,1.6
+city05,"Full pipeline, strength set from the haze level",17.4746,0.8342,1.3091,9.392,0.8559,141.6238,0.0061,0.0957,5.448,119,43,16,0.9171,0.9537,0.8276,synthetic streets,1.6
+city06,Foggy input (no processing),12.1268,0.7512,1.0,7.2454,0.0,1.0,0.0,0.0017,4.7738,89,54,14,0.8355,0.8127,0.4126,synthetic streets,1.6
+city06,Full pipeline (Balanced default),19.2895,0.7903,1.3038,17.6043,1.1613,384.0995,0.0554,0.0687,6.2,142,23,13,0.9597,0.9352,0.7832,synthetic streets,1.6
+city06,"Full pipeline, strength set from the haze level",17.3782,0.8367,1.3095,11.4468,0.8333,142.2094,0.0051,0.096,6.1969,149,43,14,0.9602,0.973,0.7622,synthetic streets,1.6
+city01,Foggy input (no processing),10.1054,0.6736,1.0,6.5649,0.0,1.0,0.0,0.002,4.0051,72,43,12,0.8192,0.7941,0.4538,synthetic streets,2.4
+city01,Full pipeline (Balanced default),16.5845,0.7841,1.3729,16.166,1.3114,465.0909,0.0473,0.0755,5.7336,100,23,16,0.9274,0.9471,0.7059,synthetic streets,2.4
+city01,"Full pipeline, strength set from the haze level",14.8674,0.8037,1.3728,14.6779,1.0915,270.0459,0.0086,0.1053,5.6879,112,52,13,0.9222,0.9487,0.7479,synthetic streets,2.4
+city02,Foggy input (no processing),9.8344,0.6628,1.0,6.7748,0.0,1.0,0.0,0.0018,3.7203,69,25,12,0.7843,0.7675,0.5286,synthetic streets,2.4
+city02,Full pipeline (Balanced default),16.6987,0.7907,1.3715,16.5472,1.2497,449.5767,0.0438,0.0839,5.9191,126,28,14,0.9577,0.9562,0.8,synthetic streets,2.4
+city02,"Full pipeline, strength set from the haze level",15.0704,0.808,1.3558,15.0564,1.0338,246.6206,0.0073,0.0974,5.7539,128,39,14,0.948,0.9664,0.7929,synthetic streets,2.4
+city03,Foggy input (no processing),10.0546,0.6716,1.0,7.0034,0.0,1.0,0.0,0.0019,4.393,94,49,15,0.8433,0.8096,0.5,synthetic streets,2.4
+city03,Full pipeline (Balanced default),16.8515,0.7853,1.3727,17.5643,1.284,497.0967,0.0512,0.0775,6.0734,139,20,13,0.9594,0.9618,0.7778,synthetic streets,2.4
+city03,"Full pipeline, strength set from the haze level",15.033,0.8012,1.3737,14.5124,1.1001,303.4826,0.0102,0.1106,6.0262,147,46,16,0.9574,0.9598,0.8264,synthetic streets,2.4
+city04,Foggy input (no processing),9.8123,0.6655,1.0,6.4716,0.0,1.0,0.0,0.0021,3.6816,67,42,14,0.7543,0.7778,0.4034,synthetic streets,2.4
+city04,Full pipeline (Balanced default),16.5532,0.789,1.3795,16.4998,1.3015,465.1674,0.0412,0.0699,5.6883,116,26,17,0.9202,0.947,0.7311,synthetic streets,2.4
+city04,"Full pipeline, strength set from the haze level",15.0172,0.8048,1.3595,14.7964,1.1778,330.3787,0.01,0.0977,5.5531,111,45,14,0.9082,0.9591,0.8235,synthetic streets,2.4
+city05,Foggy input (no processing),10.1574,0.6699,1.0,6.2606,0.0,1.0,0.0,0.0016,4.1539,72,40,12,0.8105,0.8224,0.5747,synthetic streets,2.4
+city05,Full pipeline (Balanced default),16.9052,0.7896,1.3504,15.6785,1.342,453.5338,0.047,0.0745,5.4375,95,17,12,0.9143,0.9501,0.7241,synthetic streets,2.4
+city05,"Full pipeline, strength set from the haze level",15.0154,0.8023,1.3698,13.5134,1.104,249.1674,0.0106,0.1097,5.3551,107,39,14,0.911,0.9417,0.7931,synthetic streets,2.4
+city06,Foggy input (no processing),9.9478,0.6641,1.0,7.1046,0.0,1.0,0.0,0.0016,4.3219,87,45,13,0.81,0.7863,0.4336,synthetic streets,2.4
+city06,Full pipeline (Balanced default),16.6772,0.7848,1.3684,17.7913,1.2671,489.7116,0.0462,0.0687,6.1762,147,24,15,0.9578,0.9582,0.7902,synthetic streets,2.4
+city06,"Full pipeline, strength set from the haze level",14.9306,0.8016,1.3663,15.6502,1.0528,274.8883,0.0099,0.0975,5.9816,138,39,16,0.9423,0.9705,0.7832,synthetic streets,2.4
+city01,Foggy input (no processing),8.7993,0.6112,1.0,6.3614,0.0,1.0,0.0,0.0018,3.9586,74,42,15,0.8132,0.3213,0.4202,synthetic streets,3.2
+city01,Full pipeline (Balanced default),14.1615,0.7689,1.493,17.6721,1.4209,565.6311,0.0353,0.0702,5.7242,106,29,14,0.9258,0.9458,0.7563,synthetic streets,3.2
+city01,"Full pipeline, strength set from the haze level",13.181,0.7725,1.4923,16.7598,1.2851,418.2816,0.0108,0.0963,5.6449,113,35,14,0.9159,0.9441,0.6975,synthetic streets,3.2
+city02,Foggy input (no processing),8.5398,0.599,1.0,6.4822,0.0,1.0,0.0,0.002,3.666,66,24,15,0.7766,0.3512,0.5143,synthetic streets,3.2
+city02,Full pipeline (Balanced default),14.1838,0.7717,1.4801,17.4999,1.3706,526.9374,0.0329,0.0778,5.8371,129,25,17,0.9491,0.963,0.7714,synthetic streets,3.2
+city02,"Full pipeline, strength set from the haze level",13.4019,0.7754,1.4643,17.6329,1.2542,409.2205,0.0151,0.0964,5.7613,124,30,16,0.949,0.9568,0.7857,synthetic streets,3.2
+city03,Foggy input (no processing),8.7268,0.6079,1.0,6.8163,0.0,1.0,0.0,0.0024,4.3398,94,49,15,0.8369,0.3396,0.5139,synthetic streets,3.2
+city03,Full pipeline (Balanced default),14.4658,0.77,1.4706,18.959,1.3831,591.8135,0.0376,0.0724,6.0574,132,21,14,0.9574,0.9589,0.7917,synthetic streets,3.2
+city03,"Full pipeline, strength set from the haze level",13.3458,0.7714,1.4786,17.4705,1.2523,436.7644,0.0123,0.0916,6.0668,134,28,17,0.9566,0.9567,0.7708,synthetic streets,3.2
+city04,Foggy input (no processing),8.5323,0.603,1.0,6.1413,0.0,1.0,0.0,0.0017,3.8457,74,44,18,0.7616,0.3517,0.479,synthetic streets,3.2
+city04,Full pipeline (Balanced default),14.0,0.7679,1.4967,17.2811,1.4483,544.7434,0.0304,0.0691,5.6355,117,29,14,0.9138,0.9531,0.7731,synthetic streets,3.2
+city04,"Full pipeline, strength set from the haze level",13.3814,0.7714,1.4775,16.9147,1.3739,458.8449,0.0193,0.0922,5.5148,116,34,15,0.9048,0.9463,0.7563,synthetic streets,3.2
+city05,Foggy input (no processing),8.8306,0.6068,1.0,6.0574,0.0,1.0,0.0,0.0016,4.1117,71,40,16,0.8038,0.3604,0.4713,synthetic streets,3.2
+city05,Full pipeline (Balanced default),14.3987,0.7728,1.4683,17.121,1.4598,553.0576,0.0349,0.0673,5.4301,103,18,14,0.9155,0.9415,0.7241,synthetic streets,3.2
+city05,"Full pipeline, strength set from the haze level",13.2717,0.774,1.4785,15.5989,1.3177,414.9501,0.0121,0.0907,5.3922,100,24,18,0.9097,0.9379,0.7356,synthetic streets,3.2
+city06,Foggy input (no processing),8.6414,0.5994,1.0,6.6665,0.0,1.0,0.0,0.0017,4.3746,84,49,14,0.8144,0.3313,0.3916,synthetic streets,3.2
+city06,Full pipeline (Balanced default),14.2213,0.7679,1.4739,18.8554,1.4349,571.9584,0.0347,0.0667,6.0988,139,27,13,0.9522,0.9661,0.7902,synthetic streets,3.2
+city06,"Full pipeline, strength set from the haze level",13.277,0.7704,1.4707,18.3087,1.3502,463.275,0.0122,0.0915,5.9727,146,32,18,0.9413,0.9546,0.7203,synthetic streets,3.2
+street00,Foggy input (no processing),17.4827,0.8095,1.0,14.5255,0.0,1.0,0.0,0.0024,1.4668,11,3,2,0.8447,0.4191,0.5238,9 real streets,0.4
+street00,Full pipeline (Balanced default),19.6526,0.8674,0.8391,19.5944,0.0961,1.6167,0.016,0.1158,3.9113,88,25,6,0.6863,0.858,0.9048,9 real streets,0.4
+street00,"Full pipeline, strength set from the haze level",26.555,0.9321,0.9799,17.411,-0.0114,1.1917,0.0037,0.1947,2.0668,24,9,0,0.9231,0.9092,0.8095,9 real streets,0.4
+street01,Foggy input (no processing),21.1655,0.961,1.0,47.7158,0.0,1.0,0.0,0.0016,5.7269,86,6,31,0.8384,0.6519,0.3273,9 real streets,0.4
+street01,Full pipeline (Balanced default),15.0184,0.7812,1.4399,63.5956,0.0979,2.2328,0.0238,0.0627,13.6309,455,18,243,0.7713,0.6132,0.5879,9 real streets,0.4
+street01,"Full pipeline, strength set from the haze level",19.8596,0.9114,1.3276,59.2415,0.0593,1.7585,0.0058,0.0814,11.1061,291,10,155,0.85,0.7312,0.5758,9 real streets,0.4
+street02,Foggy input (no processing),19.5272,0.9025,1.0,60.7785,0.0,1.0,0.0,0.0018,14.9334,622,68,218,0.9424,0.8816,0.4152,9 real streets,0.4
+street02,Full pipeline (Balanced default),19.4654,0.8822,1.2957,65.9159,0.0272,1.8744,0.1127,0.0779,20.0422,1132,82,360,0.9324,0.9365,0.5224,9 real streets,0.4
+street02,"Full pipeline, strength set from the haze level",25.4907,0.956,1.1243,62.7483,-0.0105,1.2564,0.0192,0.1097,17.0633,822,69,288,0.9752,0.9764,0.4963,9 real streets,0.4
+street03,Foggy input (no processing),17.4884,0.8582,1.0,26.0258,0.0,1.0,0.0,0.0019,5.8438,156,31,55,0.92,0.8458,0.3964,9 real streets,0.4
+street03,Full pipeline (Balanced default),21.7622,0.9099,1.2646,31.0718,-0.0111,1.6542,0.0223,0.0868,8.193,268,18,112,0.919,0.8949,0.6036,9 real streets,0.4
+street03,"Full pipeline, strength set from the haze level",23.1974,0.9437,1.1721,27.7492,-0.086,1.2243,0.0025,0.1242,7.0195,213,24,67,0.9538,0.9635,0.6036,9 real streets,0.4
+street04,Foggy input (no processing),19.8601,0.8474,1.0,40.2683,0.0,1.0,0.0,0.0018,9.7177,352,10,44,0.9417,0.8681,0.5011,9 real streets,0.4
+street04,Full pipeline (Balanced default),20.5792,0.8782,1.1302,44.7452,0.0418,1.8841,0.0553,0.0767,13.4791,636,12,95,0.9227,0.9358,0.6452,9 real streets,0.4
+street04,"Full pipeline, strength set from the haze level",27.4035,0.9422,1.0949,41.8255,-0.0225,1.2622,0.0041,0.1081,11.1678,444,8,50,0.9747,0.9815,0.5828,9 real streets,0.4
+street05,Foggy input (no processing),21.1204,0.9405,1.0,42.986,0.0,1.0,0.0,0.0019,7.9808,264,29,65,0.8921,0.8432,0.4879,9 real streets,0.4
+street05,Full pipeline (Balanced default),17.7897,0.8448,1.3048,53.4682,0.0793,2.0483,0.0487,0.0828,13.3102,582,34,165,0.8713,0.7707,0.6065,9 real streets,0.4
+street05,"Full pipeline, strength set from the haze level",24.6583,0.9606,1.1996,49.302,0.0331,1.4879,0.0119,0.1141,11.7634,493,35,174,0.9196,0.875,0.7035,9 real streets,0.4
+street06,Foggy input (no processing),22.5377,0.9684,1.0,20.9238,0.0,1.0,0.0,0.0018,3.7085,101,5,9,0.9202,0.8472,0.7031,9 real streets,0.4
+street06,Full pipeline (Balanced default),13.5064,0.8104,0.8949,23.834,0.0242,1.7762,0.0238,0.0867,5.6173,193,14,10,0.8845,0.7838,0.8438,9 real streets,0.4
+street06,"Full pipeline, strength set from the haze level",21.1489,0.9473,0.9905,22.8899,-0.0111,1.4313,0.0065,0.1177,4.9077,161,15,8,0.9417,0.9135,0.8672,9 real streets,0.4
+street07,Foggy input (no processing),19.6665,0.8807,1.0,42.9369,0.0,1.0,0.0,0.0018,9.4095,316,47,49,0.9312,0.87,0.5283,9 real streets,0.4
+street07,Full pipeline (Balanced default),18.969,0.8622,1.2233,50.0506,0.0404,1.8928,0.0549,0.081,13.9536,625,30,156,0.8891,0.8713,0.6415,9 real streets,0.4
+street07,"Full pipeline, strength set from the haze level",26.8882,0.9591,1.1177,45.8514,-0.0196,1.2889,0.0108,0.1145,11.0072,405,37,82,0.9644,0.9714,0.6496,9 real streets,0.4
+street08,Foggy input (no processing),21.9304,0.9559,1.0,40.3313,0.0,1.0,0.0,0.0029,7.3987,288,109,93,0.8925,0.7696,0.5131,9 real streets,0.4
+street08,Full pipeline (Balanced default),15.2895,0.8089,1.2759,56.3976,0.173,2.1942,0.0329,0.1249,13.4942,789,284,319,0.8206,0.6961,0.6283,9 real streets,0.4
+street08,"Full pipeline, strength set from the haze level",19.9594,0.9167,1.2464,51.1732,0.1063,1.7076,0.0173,0.1651,11.4986,633,169,306,0.8903,0.8143,0.6387,9 real streets,0.4
+street00,Foggy input (no processing),12.5397,0.672,1.0,10.9618,0.0,1.0,0.0,0.0024,1.1332,4,1,1,0.7197,0.2106,0.1905,9 real streets,0.8
+street00,Full pipeline (Balanced default),21.2851,0.8897,0.8825,18.468,0.3016,1.8828,0.0095,0.1129,3.5137,80,18,11,0.7215,0.9213,0.8095,9 real streets,0.8
+street00,"Full pipeline, strength set from the haze level",21.0489,0.8682,1.0369,15.9023,0.1463,1.4242,0.0044,0.1606,2.24,30,13,1,0.881,0.7541,0.8095,9 real streets,0.8
+street01,Foggy input (no processing),16.2351,0.8868,1.0,40.3899,0.0,1.0,0.0,0.0013,3.7109,52,4,9,0.6478,0.3271,0.2424,9 real streets,0.8
+street01,Full pipeline (Balanced default),15.8626,0.8108,1.7234,62.5095,0.1845,2.6719,0.0171,0.067,13.1547,409,12,216,0.7834,0.6393,0.5879,9 real streets,0.8
+street01,"Full pipeline, strength set from the haze level",18.3927,0.8811,1.6306,59.4676,0.1572,2.3219,0.0086,0.0875,11.9584,354,14,187,0.8169,0.7122,0.6242,9 real streets,0.8
+street02,Foggy input (no processing),14.5605,0.7967,1.0,55.435,0.0,1.0,0.0,0.0019,12.8023,446,58,145,0.8748,0.6742,0.283,9 real streets,0.8
+street02,Full pipeline (Balanced default),19.2971,0.8858,1.4474,65.8146,0.0704,2.2525,0.0896,0.0811,19.7331,1113,63,331,0.9408,0.9439,0.5175,9 real streets,0.8
+street02,"Full pipeline, strength set from the haze level",21.1834,0.9237,1.2563,61.2275,0.0226,1.5435,0.0207,0.1251,17.0218,832,76,266,0.9657,0.9547,0.5125,9 real streets,0.8
+street03,Foggy input (no processing),12.608,0.7518,1.0,20.6579,0.0,1.0,0.0,0.0024,4.2939,98,28,35,0.7781,0.5776,0.2117,9 real streets,0.8
+street03,Full pipeline (Balanced default),21.7265,0.8993,1.4467,30.4397,0.1734,2.0468,0.0147,0.0901,7.9424,252,17,105,0.9251,0.9215,0.5586,9 real streets,0.8
+street03,"Full pipeline, strength set from the haze level",20.2375,0.8971,1.363,26.4708,0.0753,1.5296,0.0037,0.1246,7.0443,194,19,67,0.9451,0.9691,0.5495,9 real streets,0.8
+street04,Foggy input (no processing),14.7725,0.7296,1.0,35.9523,0.0,1.0,0.0,0.0023,7.769,204,12,24,0.8414,0.6486,0.2839,9 real streets,0.8
+street04,Full pipeline (Balanced default),20.9043,0.8746,1.2468,44.4752,0.093,2.3102,0.0463,0.104,13.2308,618,14,89,0.9271,0.9478,0.6151,9 real streets,0.8
+street04,"Full pipeline, strength set from the haze level",23.2674,0.9057,1.2138,41.3593,0.0349,1.6667,0.0092,0.1115,11.3779,444,10,61,0.9637,0.9706,0.5591,9 real streets,0.8
+street05,Foggy input (no processing),16.1153,0.855,1.0,37.4738,0.0,1.0,0.0,0.0022,6.4392,170,34,23,0.7923,0.5409,0.2588,9 real streets,0.8
+street05,Full pipeline (Balanced default),18.4708,0.8663,1.4592,53.3367,0.1642,2.451,0.0364,0.0867,13.196,564,25,172,0.8762,0.7867,0.6361,9 real streets,0.8
+street05,"Full pipeline, strength set from the haze level",22.4428,0.9373,1.3779,49.5926,0.1184,1.9484,0.0148,0.1217,12.0119,503,33,159,0.912,0.8672,0.6739,9 real streets,0.8
+street06,Foggy input (no processing),17.3941,0.9184,1.0,18.3604,0.0,1.0,0.0,0.0019,3.0511,72,4,6,0.8372,0.5519,0.5156,9 real streets,0.8
+street06,Full pipeline (Balanced default),15.0042,0.8485,0.995,23.7477,0.1101,2.1217,0.0193,0.082,5.6511,185,15,8,0.8894,0.8408,0.8125,9 real streets,0.8
+street06,"Full pipeline, strength set from the haze level",20.5316,0.9282,1.1165,22.8969,0.0813,1.8317,0.0092,0.1155,5.2074,163,12,11,0.9219,0.9045,0.8203,9 real streets,0.8
+street07,Foggy input (no processing),14.6409,0.7659,1.0,37.2516,0.0,1.0,0.0,0.002,7.1031,190,45,28,0.8046,0.5752,0.3504,9 real streets,0.8
+street07,Full pipeline (Balanced default),19.5797,0.8651,1.3413,49.0251,0.1293,2.2927,0.0411,0.0863,13.4855,595,32,134,0.8998,0.887,0.6361,9 real streets,0.8
+street07,"Full pipeline, strength set from the haze level",23.1906,0.9215,1.2557,44.4625,0.0586,1.6542,0.0122,0.1176,11.1998,430,45,72,0.9591,0.9669,0.6685,9 real streets,0.8
+street08,Foggy input (no processing),16.9773,0.8783,1.0,33.8091,0.0,1.0,0.0,0.0026,5.619,196,84,49,0.7725,0.466,0.3194,9 real streets,0.8
+street08,Full pipeline (Balanced default),15.1724,0.8321,1.4419,54.7548,0.2805,2.5756,0.0231,0.1234,12.5834,708,229,300,0.8514,0.729,0.6571,9 real streets,0.8
+street08,"Full pipeline, strength set from the haze level",18.2397,0.8999,1.431,50.867,0.2287,2.1747,0.0178,0.2112,11.4492,627,176,296,0.8934,0.8099,0.6832,9 real streets,0.8
+street00,Foggy input (no processing),8.4602,0.5145,1.0,6.3384,0.0,1.0,0.0,0.0024,0.6361,0,0,0,0.4853,0.0753,0.0,9 real streets,1.6
+street00,Full pipeline (Balanced default),20.9136,0.8484,1.0026,15.9498,0.9195,2.4723,0.0082,0.1138,2.9911,61,15,3,0.7791,0.8719,0.8095,9 real streets,1.6
+street00,"Full pipeline, strength set from the haze level",16.9723,0.7882,1.1438,13.9816,0.7205,2.0712,0.0074,0.157,2.3924,37,6,2,0.8386,0.557,0.6667,9 real streets,1.6
+street01,Foggy input (no processing),12.1957,0.7305,1.0,27.0123,0.0,1.0,0.0,0.0013,1.4112,11,2,2,0.3112,0.0537,0.0545,9 real streets,1.6
+street01,Full pipeline (Balanced default),17.1752,0.8505,2.2753,59.4156,0.5512,3.7339,0.019,0.0586,12.2725,359,11,186,0.8071,0.7111,0.6121,9 real streets,1.6
+street01,"Full pipeline, strength set from the haze level",17.1752,0.8505,2.2753,59.4156,0.5512,3.7339,0.019,0.0578,12.2725,359,11,186,0.8071,0.7111,0.6121,9 real streets,1.6
+street02,Foggy input (no processing),10.4471,0.6093,1.0,43.5701,0.0,1.0,0.0,0.0019,6.8818,206,10,22,0.5952,0.2932,0.1047,9 real streets,1.6
+street02,Full pipeline (Balanced default),18.3131,0.884,1.6659,63.279,0.1765,3.0096,0.0476,0.0956,18.4872,943,90,277,0.9479,0.9595,0.5224,9 real streets,1.6
+street02,"Full pipeline, strength set from the haze level",17.851,0.8768,1.5288,59.127,0.1331,2.3831,0.0258,0.1116,16.6785,797,79,231,0.9372,0.9204,0.394,9 real streets,1.6
+street03,Foggy input (no processing),8.6439,0.5958,1.0,12.91,0.0,1.0,0.0,0.0023,1.7008,20,1,13,0.4061,0.1179,0.0856,9 real streets,1.6
+street03,Full pipeline (Balanced default),19.7906,0.8639,1.6946,28.8345,0.6746,3.1181,0.0103,0.0869,7.7129,270,32,90,0.928,0.9346,0.5766,9 real streets,1.6
+street03,"Full pipeline, strength set from the haze level",17.4398,0.8373,1.6612,25.833,0.5612,2.6637,0.0068,0.1238,7.2077,224,22,74,0.9329,0.9531,0.5495,9 real streets,1.6
+street04,Foggy input (no processing),10.4489,0.5507,1.0,26.4598,0.0,1.0,0.0,0.0018,3.3936,57,6,7,0.4849,0.1679,0.0796,9 real streets,1.6
+street04,Full pipeline (Balanced default),19.6534,0.8578,1.433,43.0593,0.2422,3.3009,0.0201,0.0762,12.3976,538,9,59,0.9425,0.9725,0.5978,9 real streets,1.6
+street04,"Full pipeline, strength set from the haze level",19.467,0.857,1.4489,40.8003,0.2082,2.7818,0.0157,0.1167,11.6122,464,12,68,0.9614,0.9423,0.5892,9 real streets,1.6
+street05,Foggy input (no processing),11.9323,0.6923,1.0,26.6434,0.0,1.0,0.0,0.002,2.6983,49,7,10,0.4362,0.1495,0.0889,9 real streets,1.6
+street05,Full pipeline (Balanced default),19.5706,0.8877,1.7898,51.85,0.3948,3.4637,0.0205,0.0894,12.7067,534,25,186,0.8911,0.8242,0.6954,9 real streets,1.6
+street05,"Full pipeline, strength set from the haze level",19.927,0.8975,1.7707,50.8199,0.3781,3.2935,0.0187,0.1186,12.4758,516,31,170,0.8977,0.8431,0.6658,9 real streets,1.6
+street06,Foggy input (no processing),12.9756,0.8159,1.0,13.4954,0.0,1.0,0.0,0.0019,1.1956,12,3,2,0.4469,0.0539,0.125,9 real streets,1.6
+street06,Full pipeline (Balanced default),17.9628,0.8848,1.2926,23.4218,0.3508,3.0094,0.0165,0.0817,5.5151,181,15,13,0.9018,0.8784,0.8281,9 real streets,1.6
+street06,"Full pipeline, strength set from the haze level",19.0378,0.8944,1.3461,23.1704,0.3419,2.9293,0.0154,0.1132,5.4838,182,15,11,0.9016,0.8863,0.7812,9 real streets,1.6
+street07,Foggy input (no processing),10.4258,0.5791,1.0,26.4096,0.0,1.0,0.0,0.0018,2.7248,43,3,3,0.4177,0.0855,0.1078,9 real streets,1.6
+street07,Full pipeline (Balanced default),20.0622,0.8556,1.5523,45.8293,0.3532,3.2018,0.0125,0.1001,12.2686,538,41,115,0.9268,0.9389,0.628,9 real streets,1.6
+street07,"Full pipeline, strength set from the haze level",19.845,0.8651,1.5527,42.878,0.2919,2.7254,0.0094,0.1114,11.4745,443,54,89,0.9343,0.9412,0.5984,9 real streets,1.6
+street08,Foggy input (no processing),12.8871,0.718,1.0,21.5069,0.0,1.0,0.0,0.0042,2.4141,70,18,5,0.4294,0.1656,0.1021,9 real streets,1.6
+street08,Full pipeline (Balanced default),15.3972,0.8613,1.8522,50.9852,0.6991,3.5077,0.0173,0.1271,11.5812,645,225,241,0.8773,0.7977,0.6021,9 real streets,1.6
+street08,"Full pipeline, strength set from the haze level",15.8617,0.8701,1.8513,50.0878,0.6823,3.4021,0.0162,0.1983,11.398,639,197,283,0.8859,0.8142,0.6073,9 real streets,1.6
+street00,Foggy input (no processing),6.6317,0.428,1.0,4.0319,0.0,1.0,0.0,0.0028,0.3547,0,0,0,0.3077,0.0222,0.0,9 real streets,2.4
+street00,Full pipeline (Balanced default),16.1248,0.76,1.2601,13.3867,1.5186,3.1362,0.0083,0.1255,2.6053,39,8,1,0.8226,0.5795,0.7143,9 real streets,2.4
+street00,"Full pipeline, strength set from the haze level",15.6136,0.7503,1.2843,13.0633,1.4784,3.0611,0.0087,0.1724,2.5392,35,7,1,0.828,0.5467,0.7143,9 real streets,2.4
+street01,Foggy input (no processing),10.4184,0.6083,1.0,16.3445,0.0,1.0,0.0,0.0014,0.6939,6,1,0,0.1655,0.0,0.0303,9 real streets,2.4
+street01,Full pipeline (Balanced default),17.0877,0.853,2.8301,54.599,1.1232,5.0252,0.015,0.0608,10.952,284,19,108,0.8346,0.8009,0.5758,9 real streets,2.4
+street01,"Full pipeline, strength set from the haze level",17.0877,0.853,2.8301,54.599,1.1232,5.0252,0.015,0.059,10.952,284,19,108,0.8346,0.8009,0.5758,9 real streets,2.4
+street02,Foggy input (no processing),8.5992,0.4713,1.0,31.1016,0.0,1.0,0.0,0.002,4.1532,121,3,3,0.408,0.1043,0.0761,9 real streets,2.4
+street02,Full pipeline (Balanced default),16.6874,0.8536,1.8184,58.6216,0.3795,3.7494,0.031,0.0824,16.7828,794,77,195,0.9268,0.9197,0.4227,9 real streets,2.4
+street02,"Full pipeline, strength set from the haze level",16.4832,0.8447,1.7855,57.3484,0.3624,3.5268,0.0277,0.1148,16.3502,746,68,152,0.9181,0.9013,0.3903,9 real streets,2.4
+street03,Foggy input (no processing),6.915,0.4911,1.0,7.7757,0.0,1.0,0.0,0.0021,0.9232,7,0,5,0.2447,0.0,0.045,9 real streets,2.4
+street03,Full pipeline (Balanced default),16.6106,0.8111,1.8779,26.3633,1.3865,4.509,0.009,0.0902,7.3447,228,29,88,0.9193,0.9383,0.518,9 real streets,2.4
+street03,"Full pipeline, strength set from the haze level",16.6106,0.8111,1.8779,26.3633,1.3865,4.509,0.009,0.0856,7.3447,228,29,88,0.9193,0.9383,0.518,9 real streets,2.4
+street04,Foggy input (no processing),8.4275,0.431,1.0,16.8566,0.0,1.0,0.0,0.0022,1.2684,16,2,4,0.2142,0.0259,0.0344,9 real streets,2.4
+street04,Full pipeline (Balanced default),18.132,0.8312,1.699,40.8366,0.546,4.6363,0.0166,0.0777,11.5865,499,14,58,0.9427,0.9396,0.6,9 real streets,2.4
+street04,"Full pipeline, strength set from the haze level",18.132,0.8312,1.699,40.8366,0.546,4.6363,0.0166,0.0756,11.5865,499,14,58,0.9427,0.9396,0.6,9 real streets,2.4
+street05,Foggy input (no processing),10.0268,0.569,1.0,17.1699,0.0,1.0,0.0,0.002,1.2321,12,2,3,0.2294,0.0019,0.027,9 real streets,2.4
+street05,Full pipeline (Balanced default),18.5519,0.8865,2.0313,47.6754,0.7841,4.4832,0.0095,0.0845,11.5299,456,32,130,0.9006,0.879,0.6846,9 real streets,2.4
+street05,"Full pipeline, strength set from the haze level",18.5519,0.8865,2.0313,47.6754,0.7841,4.4832,0.0095,0.0823,11.5299,456,32,130,0.9006,0.879,0.6846,9 real streets,2.4
+street06,Foggy input (no processing),10.8811,0.7334,1.0,8.9741,0.0,1.0,0.0,0.0019,0.2243,0,0,0,0.1016,0.0,0.0,9 real streets,2.4
+street06,Full pipeline (Balanced default),20.4573,0.891,1.7571,22.7762,0.7445,4.1616,0.0159,0.0808,5.3621,175,15,10,0.9151,0.9097,0.8594,9 real streets,2.4
+street06,"Full pipeline, strength set from the haze level",20.4573,0.891,1.7571,22.7762,0.7445,4.1616,0.0159,0.0795,5.3621,175,15,10,0.9151,0.9097,0.8594,9 real streets,2.4
+street07,Foggy input (no processing),8.497,0.4512,1.0,17.2192,0.0,1.0,0.0,0.0019,0.9866,14,0,0,0.1724,0.0084,0.035,9 real streets,2.4
+street07,Full pipeline (Balanced default),18.5771,0.8306,1.8396,42.1939,0.7537,4.3639,0.0095,0.0778,11.2764,436,42,102,0.9178,0.9203,0.5606,9 real streets,2.4
+street07,"Full pipeline, strength set from the haze level",18.5771,0.8306,1.8396,42.1939,0.7537,4.3639,0.0095,0.0758,11.2764,436,42,102,0.9178,0.9203,0.5606,9 real streets,2.4
+street08,Foggy input (no processing),11.0588,0.5932,1.0,12.8128,0.0,1.0,0.0,0.0035,1.2088,25,8,0,0.2386,0.0126,0.0497,9 real streets,2.4
+street08,Full pipeline (Balanced default),15.3276,0.8549,2.297,45.4615,1.4519,4.54,0.0149,0.1253,9.9329,493,157,162,0.8697,0.8308,0.5681,9 real streets,2.4
+street08,"Full pipeline, strength set from the haze level",15.3276,0.8549,2.297,45.4615,1.4519,4.54,0.0149,0.1185,9.9329,493,157,162,0.8697,0.8308,0.5681,9 real streets,2.4
+street00,Foggy input (no processing),5.6193,0.3753,1.0,2.6264,0.0,1.0,0.0,0.0024,0.1826,0,0,0,0.1696,0.0024,0.0,9 real streets,3.2
+street00,Full pipeline (Balanced default),12.3707,0.6677,1.6207,10.7574,2.1201,3.7547,0.0081,0.1136,2.2282,27,5,1,0.8115,0.404,0.619,9 real streets,3.2
+street00,"Full pipeline, strength set from the haze level",12.3707,0.6677,1.6207,10.7574,2.1201,3.7547,0.0081,0.1197,2.2282,27,5,1,0.8115,0.404,0.619,9 real streets,3.2
+street01,Foggy input (no processing),9.4625,0.5225,1.0,9.3985,0.0,1.0,0.0,0.0018,0.3456,2,0,0,0.0846,0.0,0.0121,9 real streets,3.2
+street01,Full pipeline (Balanced default),15.5147,0.8046,3.3645,46.7727,1.9733,6.1465,0.0138,0.064,8.9029,203,8,52,0.7841,0.7895,0.4303,9 real streets,3.2
+street01,"Full pipeline, strength set from the haze level",15.5147,0.8046,3.3645,46.7727,1.9733,6.1465,0.0138,0.0635,8.9029,203,8,52,0.7841,0.7895,0.4303,9 real streets,3.2
+street02,Foggy input (no processing),7.5787,0.3761,1.0,20.4807,0.0,1.0,0.0,0.002,2.9352,69,1,1,0.3107,0.0402,0.0387,9 real streets,3.2
+street02,Full pipeline (Balanced default),15.1332,0.7865,1.9698,52.3527,0.7965,4.4324,0.0235,0.0874,13.8637,583,44,87,0.8513,0.8057,0.293,9 real streets,3.2
+street02,"Full pipeline, strength set from the haze level",15.1332,0.7865,1.9698,52.3527,0.7965,4.4324,0.0235,0.0804,13.8637,583,44,87,0.8513,0.8057,0.293,9 real streets,3.2
+street03,Foggy input (no processing),5.9856,0.4216,1.0,4.3116,0.0,1.0,0.0,0.0027,0.1172,1,0,0,0.0344,0.0,0.0045,9 real streets,3.2
+street03,Full pipeline (Balanced default),13.4923,0.7444,2.2097,23.0877,2.5676,6.1206,0.0084,0.0892,6.7233,191,25,71,0.8883,0.8826,0.3739,9 real streets,3.2
+street03,"Full pipeline, strength set from the haze level",13.4923,0.7444,2.2097,23.0877,2.5676,6.1206,0.0084,0.0854,6.7233,191,25,71,0.8883,0.8826,0.3739,9 real streets,3.2
+street04,Foggy input (no processing),7.264,0.354,1.0,8.7737,0.0,1.0,0.0,0.0022,0.4923,5,0,2,0.0881,0.0127,0.0172,9 real streets,3.2
+street04,Full pipeline (Balanced default),15.6349,0.7772,1.9839,37.0541,1.3166,6.0605,0.0146,0.0814,10.2922,402,15,40,0.9133,0.8254,0.5161,9 real streets,3.2
+street04,"Full pipeline, strength set from the haze level",15.6349,0.7772,1.9839,37.0541,1.3166,6.0605,0.0146,0.0763,10.2922,402,15,40,0.9133,0.8254,0.5161,9 real streets,3.2
+street05,Foggy input (no processing),8.9592,0.4839,1.0,9.9635,0.0,1.0,0.0,0.0022,0.5277,3,0,2,0.1053,0.0,0.0135,9 real streets,3.2
+street05,Full pipeline (Balanced default),17.2293,0.848,2.4394,42.9893,1.5859,5.6381,0.0081,0.0844,9.9974,354,32,66,0.8551,0.8526,0.4744,9 real streets,3.2
+street05,"Full pipeline, strength set from the haze level",17.2293,0.848,2.4394,42.9893,1.5859,5.6381,0.0081,0.0819,9.9974,354,32,66,0.8551,0.8526,0.4744,9 real streets,3.2
+street06,Foggy input (no processing),9.6644,0.6735,1.0,5.1676,0.0,1.0,0.0,0.0022,0.018,0,0,0,0.0088,0.0,0.0,9 real streets,3.2
+street06,Full pipeline (Balanced default),20.0757,0.8894,2.3868,21.4194,1.451,5.4438,0.0127,0.0829,4.9982,165,8,9,0.9199,0.9331,0.8359,9 real streets,3.2
+street06,"Full pipeline, strength set from the haze level",20.0757,0.8894,2.3868,21.4194,1.451,5.4438,0.0127,0.0914,4.9982,165,8,9,0.9199,0.9331,0.8359,9 real streets,3.2
+street07,Foggy input (no processing),7.4128,0.3681,1.0,10.7491,0.0,1.0,0.0,0.0021,0.4357,5,0,0,0.0801,0.0,0.0135,9 real streets,3.2
+street07,Full pipeline (Balanced default),16.136,0.7682,2.2031,37.4191,1.4579,5.5987,0.0096,0.0827,9.6615,396,39,85,0.8481,0.8163,0.4663,9 real streets,3.2
+street07,"Full pipeline, strength set from the haze level",16.136,0.7682,2.2031,37.4191,1.4579,5.5987,0.0096,0.0773,9.6615,396,39,85,0.8481,0.8163,0.4663,9 real streets,3.2
+street08,Foggy input (no processing),10.0552,0.5061,1.0,7.821,0.0,1.0,0.0,0.0033,0.5958,8,1,0,0.1254,0.0,0.0131,9 real streets,3.2
+street08,Full pipeline (Balanced default),15.3732,0.8035,2.7735,38.1494,2.2833,5.5625,0.0139,0.1132,8.2236,407,103,124,0.8172,0.7714,0.4948,9 real streets,3.2
+street08,"Full pipeline, strength set from the haze level",15.3732,0.8035,2.7735,38.1494,2.2833,5.5625,0.0139,0.1117,8.2236,407,103,124,0.8172,0.7714,0.4948,9 real streets,3.2

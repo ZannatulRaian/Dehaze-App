@@ -20,6 +20,7 @@ import io
 import math
 import random
 import time
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -28,9 +29,11 @@ import numpy as np
 import streamlit as st
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from dehaze_video import process_video
+
 from dehaze_core import (  # the image-processing code lives in dehaze_core.py
-    P_BALANCED, P_MODULES, STAGE_ORDER, apply_stage, dehaze_pipeline, downstream_metrics, edge_maps,
-    estimate_blur as _estimate_blur, make_sample_scene, psnr, quality_metrics, simulate_blur as _simulate_blur,
+    P_BALANCED, P_MODULES, P_TRAFFIC, STAGE_ORDER, apply_stage, auto_strength_params, dehaze_pipeline,
+    downstream_metrics, edge_maps, estimate_blur as _estimate_blur, haze_level as _haze_level, strength_scale, make_sample_scene, psnr, quality_metrics, simulate_blur as _simulate_blur,
     simulate_fog as _simulate_fog, ssim, stage_active,
 )
 
@@ -51,6 +54,7 @@ simulate_fog = st.cache_data(show_spinner=False)(_simulate_fog)
 simulate_blur = st.cache_data(show_spinner=False)(_simulate_blur)
 estimate_blur = st.cache_data(show_spinner=False, max_entries=6)(_estimate_blur)
 downstream = st.cache_data(show_spinner=False, max_entries=8)(downstream_metrics)   # Canny + Hough counts
+haze_of = st.cache_data(show_spinner=False, max_entries=6)(_haze_level)
 MAX_DIM = 1200  # images larger than this (on the long edge) are downscaled
 
 
@@ -104,14 +108,22 @@ TEST_DIR = APP_DIR / "assets" / "test images"
 def list_test_images():
     """{label: (hazy_path, clear_reference_path_or_None)} for every photo in assets/test images."""
     found = {}
-    for f in sorted(glob.glob(str(TEST_DIR / "**" / "*.jpg"), recursive=True)):
+    for f in sorted(glob.glob(str(TEST_DIR / "**" / "*.*"), recursive=True)):
         pth = Path(f)
-        if "clear_reference" in pth.name:
+        if (pth.suffix.lower() not in (".jpg", ".jpeg", ".png") or "clear_reference" in pth.name
+                or "_depth" in pth.name or pth.parent.name == "urban_real_clear"):
             continue
-        ref = pth.with_name(pth.name.replace("_hazy", "_clear_reference"))
+        ref = pth.with_suffix("").with_name(pth.stem.replace("_hazy", "_clear_reference")).with_suffix(pth.suffix)
         label = pth.stem.replace("_hazy", "").replace("_", " ").capitalize()
         found[label + (" (clear reference)" if ref.exists() else "")] = (pth, ref if ref.exists() else None)
     return found
+
+
+@st.cache_data(show_spinner=False)
+def list_clear_photos():
+    """{label: path} of clear real street photos (python get_street_photos.py): fog is simulated on them."""
+    return {"Street photo " + Path(f).stem.split("_")[0][6:] + " (clear; fog simulated)": Path(f)
+            for f in sorted(glob.glob(str(TEST_DIR / "urban_real_clear" / "*.jpg")))}
 
 
 def _read_rgb(path, size=None):
@@ -131,7 +143,7 @@ def _ui(P):
                 sharpen_strength=P["sharpen"], dcp_omega=P["omega"], dcp_t0=P["t0"], dcp_patch=P["patch"],
                 freq_cutoff=P["cutoff"], tone_gamma=P["gamma"], tone_sat=P["sat"], tone_balance=P["balance"],
                 deblur_amount=P["deblur"], deblur_kind=P["deblur_kind"], deblur_k=P["deblur_k"], deblur_auto=False,
-                use_dcp=P["use_dcp"], modules_only=False)
+                deblur_angle=0.0, strength_auto=False, use_dcp=P["use_dcp"], modules_only=False)
 
 
 _BASE = _ui(P_BALANCED)
@@ -144,6 +156,8 @@ PRESETS = {
     "Maximum detail": {**_BASE, "hist_strength": 45, "freq_strength": 40, "smooth_strength": 35,
                        "sharpen_strength": 55, "dcp_omega": 0.95, "dcp_t0": 0.12},
     "Fog removal only": {**_BASE, "hist_strength": 0, "freq_strength": 0, "smooth_strength": 0, "sharpen_strength": 0},
+    # for vehicle and pedestrian detection: the frequency, sharpening and colour-balance stages lowered detection recall
+    "Traffic monitoring": {**_ui(P_TRAFFIC), "strength_auto": True},
     "Course modules only": {**_ui(P_MODULES), "use_dcp": True, "modules_only": True},
 }
 
@@ -931,14 +945,14 @@ st.markdown(
 render_title()
 render_header()
 
-SAMPLE_LABEL, PLACEHOLDER = "Sample scene (synthetic city)", "Choose a source…"
+SAMPLE_LABEL, PLACEHOLDER = "Sample scene (synthetic city)", "Or try a sample…"
 VIEWS = ["Side by side", "Slider", "Original", "Dehazed", "Stages", "Edges"]
 STAGE_LABELS = ["01 Dark Channel", "02 Deblur", "05 Smoothing", "06 Sharpening", "03 Histogram", "04 Frequency", "07 Tone"]  # run order
 
 for _k, _v in {"source_key": None, "source_img": None, "source_depth": None, "reference": None,
                "pre_foggy": True, "fog_density": 1.6, "upload_round": 0, "upload_error": None,
                "use_dcp": True, "source_choice": PLACEHOLDER, "blur_amount": 0.0, "blur_kind": "Gaussian",
-               "preset_choice": "Balanced (default)",
+               "preset_choice": "Balanced (default)", "blur_angle": 0.0,
                **PRESETS["Balanced (default)"]}.items():
     st.session_state.setdefault(_k, _v)
 
@@ -947,6 +961,8 @@ def _apply_auto_enhance():
     for k, v in PRESETS["Balanced (default)"].items():
         st.session_state[k] = v
     st.session_state.use_dcp = True
+    st.session_state.strength_auto = True       # Auto-Enhance = Balanced, strength from the haze level, blur measured
+    st.session_state.deblur_auto = True
     st.session_state.preset_choice = "Balanced (default)"
 
 
@@ -960,6 +976,7 @@ def _apply_reset():
     st.session_state.tone_balance = 0
     st.session_state.deblur_amount = 0.0
     st.session_state.deblur_auto = False
+    st.session_state.strength_auto = False
 
 
 def _apply_preset():
@@ -976,6 +993,11 @@ def _choose_source():
         st.session_state.update(source_img=img, source_key="sample", source_depth=depth,
                                 reference=("sample", img), pre_foggy=False)
         return
+    if choice in list_clear_photos():          # a clear street photo: fog is simulated on it, the photo is the reference
+        img = _read_rgb(list_clear_photos()[choice])
+        st.session_state.update(source_img=img, source_key=f"street:{choice}", source_depth=None,
+                                reference=(f"street:{choice}", img), pre_foggy=False)
+        return
     path, ref = list_test_images()[choice]
     img, key = _read_rgb(path), f"test:{choice}"
     st.session_state.update(
@@ -991,15 +1013,33 @@ def current_params():
     return dict(hist=ss.hist_strength, freq=ss.freq_strength, smooth=ss.smooth_strength,
                 sharpen=ss.sharpen_strength, omega=ss.dcp_omega, t0=ss.dcp_t0, patch=ss.dcp_patch,
                 use_dcp=bool(ss.use_dcp and not only), deblur=0.0 if only else ss.deblur_amount,
-                deblur_kind=ss.deblur_kind, deblur_k=ss.deblur_k,
+                deblur_kind=ss.deblur_kind, deblur_k=ss.deblur_k, deblur_angle=ss.deblur_angle,
                 gamma=1.0 if only else ss.tone_gamma, sat=1.0 if only else ss.tone_sat,
                 balance=0 if only else ss.tone_balance, cutoff=ss.freq_cutoff)
+
+
+def effective_params(img, P):
+    """P with the automatic options applied to this photo: the blur measured by estimate_blur and the strengths scaled
+    to the haze level. Returns (settings, info) with info["blur"] / info["haze"] set for the options that are on."""
+    ss, info = st.session_state, {}
+    if ss.deblur_auto and not ss.modules_only:
+        est = estimate_blur(img)
+        info["blur"] = est
+        if est["kind"] in ("Gaussian", "Motion"):
+            P = dict(P, deblur=round(est["amount"] * 2) / 2, deblur_kind=est["kind"], deblur_angle=est["angle"])  # slider step 0.5
+        else:
+            P = dict(P, deblur=0.0)
+    if ss.strength_auto:
+        h = haze_of(img)
+        info["haze"] = (h, strength_scale(h))
+        P = auto_strength_params(img, P, haze=h)[0]
+    return P, info
 
 
 has_image = st.session_state.source_img is not None
 pipe_info = None  # filled in by the Preview card once a photo is loaded
 hazy = result = None
-blur_est = None   # estimate_blur() of the photo when "detect the blur automatically" is on
+auto_info = {}    # what the automatic options found for the current photo (see effective_params)
 
 # Both cards live inside a narrower, centered strip rather than stretching
 # across the whole wide-mode page — full-width made them read as short,
@@ -1013,6 +1053,8 @@ left_col, right_col = center_col.columns(CARD_SPLIT, gap="medium")
 with left_col:
     with st.container(border=True, key="upload_card"):
         if not has_image:
+            st.selectbox("Or try a sample", [PLACEHOLDER, SAMPLE_LABEL, *list_clear_photos(), *list_test_images()],
+                         key="source_choice", on_change=_choose_source, label_visibility="collapsed")
             # No `type=` filter: every image format is accepted (WebP, GIF, BMP,
             # TIFF, ... — see load_photo). A file that isn't a readable image gets
             # an explanation under the box, and the box starts over (a new widget
@@ -1043,14 +1085,8 @@ with left_col:
             raw = st.session_state.source_img
             hazy = raw if st.session_state.pre_foggy else simulate_blur(
                 simulate_fog(raw, st.session_state.source_depth, st.session_state.fog_density),
-                st.session_state.blur_amount, st.session_state.blur_kind)
-            P = current_params()
-            if st.session_state.deblur_auto and not st.session_state.modules_only:
-                blur_est = estimate_blur(hazy)
-                if blur_est["kind"] in ("Gaussian", "Motion"):
-                    P = dict(P, deblur=round(blur_est["amount"] * 2) / 2, deblur_kind=blur_est["kind"])  # slider step 0.5
-                else:
-                    P = dict(P, deblur=0.0)
+                st.session_state.blur_amount, st.session_state.blur_kind, st.session_state.blur_angle)
+            P, auto_info = effective_params(hazy, current_params())
             src_h, src_w = hazy.shape[:2]
             view = st.session_state.get("view_mode") or "Side by side"
             # Only for a sliver of a picture (taller than 5:1): see the preview CSS.
@@ -1144,6 +1180,10 @@ with left_col:
             m0, m1 = quality_metrics(hazy), quality_metrics(result)
             # Only when fog (and blur) were simulated is there a clear reference: the photo itself.
             ref = raw if not st.session_state.pre_foggy else None
+            if ref is None and st.session_state.reference is not None:      # a bundled photo that comes with its clear version
+                ref_key, ref_img = st.session_state.reference
+                if ref_key == st.session_state.source_key and ref_img.shape == hazy.shape:
+                    ref = ref_img
             d0, d1 = downstream(hazy, ref), downstream(result, ref)
 
             def _row(name, a, b, d):
@@ -1222,6 +1262,10 @@ with right_col:
             st.slider("Blur amount", 0.0, 10.0, step=0.5, key="blur_amount",
                       disabled=st.session_state.pre_foggy, label_visibility="collapsed")
             st.selectbox("Blur type", ["Gaussian", "Motion"], key="blur_kind", disabled=st.session_state.pre_foggy)
+            if st.session_state.blur_kind == "Motion":
+                st.markdown(_param_row("Motion direction", f"{st.session_state.blur_angle:.0f}°"), unsafe_allow_html=True)
+                st.slider("Motion direction", 0.0, 179.0, step=5.0, key="blur_angle",
+                          disabled=st.session_state.pre_foggy, label_visibility="collapsed")
             st.toggle("Course modules only (skip dark channel, deblur and tone)", key="modules_only")
 
         # Stage 01 — Dark Channel Prior
@@ -1240,6 +1284,7 @@ with right_col:
 
         # Stage 02 — Deblur
         with st.container(key="stage_deblur"):
+            blur_est = auto_info.get("blur")
             auto_on = bool(st.session_state.deblur_auto and blur_est is not None)
             amt = st.session_state.deblur_amount
             if auto_on:
@@ -1250,13 +1295,17 @@ with right_col:
             if auto_on:
                 kind = blur_est["kind"]
                 st.caption("Detected: the photo looks sharp, nothing to undo." if kind == "none" else
-                           f"Detected: {kind.lower()} blur of about {blur_est['amount']:.1f} px "
-                           "(undone below)." if kind in ("Gaussian", "Motion") else
-                           "Detected: vertical motion blur, which this deblur cannot undo.")
+                           f"Detected: {kind.lower()} blur of about {blur_est['amount']:.1f} px"
+                           + (f" at {blur_est['angle']:.0f}° (0° = horizontal)" if kind == "Motion" else "") + ", undone below.")
             st.markdown(_param_row("Blur to undo", "off" if amt == 0 else f"{amt:.1f}px"), unsafe_allow_html=True)
             st.slider("Blur to undo", 0.0, 10.0, step=0.5, key="deblur_amount", label_visibility="collapsed",
                       disabled=auto_on)
             st.selectbox("Assumed blur type", ["Gaussian", "Motion"], key="deblur_kind", disabled=auto_on)
+            if st.session_state.deblur_kind == "Motion" or (auto_on and blur_est["kind"] == "Motion"):
+                ang = blur_est["angle"] if auto_on and blur_est["kind"] == "Motion" else st.session_state.deblur_angle
+                st.markdown(_param_row("Motion direction", f"{ang:.0f}°"), unsafe_allow_html=True)
+                st.slider("Motion direction to undo", 0.0, 179.0, step=5.0, key="deblur_angle",
+                          label_visibility="collapsed", disabled=auto_on)
             st.markdown(_param_row("Noise damping (K)", f"{st.session_state.deblur_k:.3f}"), unsafe_allow_html=True)
             st.slider("Noise damping", 0.001, 0.100, step=0.001, format="%.3f", key="deblur_k",
                       label_visibility="collapsed")
@@ -1299,6 +1348,10 @@ with right_col:
 
         with st.container(key="pipeline_actions"):
             st.selectbox("Preset", list(PRESETS), key="preset_choice", on_change=_apply_preset)
+            st.toggle("Set the strength from the haze level", key="strength_auto")
+            if "haze" in auto_info:
+                st.caption(f"Haze level {auto_info['haze'][0]:.2f}: the enhancement runs at "
+                           f"{auto_info['haze'][1] * 100:.0f}% of the sliders' strength.")
             b1, b2 = st.columns(2)
             with b1:
                 st.button("Auto-Enhance", width="stretch", on_click=_apply_auto_enhance)
@@ -1334,7 +1387,7 @@ with lower_col:
                     results.append({"name": f.name, "error": unreadable_message(f.name, exc)})
                 else:
                     t_b = time.perf_counter()
-                    out_b = dehaze_pipeline(img_b, P_b)
+                    out_b = dehaze_pipeline(img_b, effective_params(img_b, P_b)[0])
                     sec = time.perf_counter() - t_b
                     q0, q1 = quality_metrics(img_b), quality_metrics(out_b)
                     results.append({"name": f.name, "size": f"{img_b.shape[1]}x{img_b.shape[0]}", "sec": sec,
@@ -1362,6 +1415,39 @@ with lower_col:
             st.download_button("Download all as ZIP", data=buf.getvalue(), file_name="dehazed_batch.zip",
                                mime="application/zip")
 
+    with st.container(border=True, key="video_card"):
+        st.markdown('<div class="card-heading">Video</div>', unsafe_allow_html=True)
+        st.markdown('<p class="ufc-cap">Dehaze a short clip from a fixed camera with the current settings, including the '
+                    'automatic options. The fog, colour and contrast estimates are smoothed over time and static pixels are '
+                    'averaged, so the result does not flicker; moving vehicles are left alone. Frames are scaled to at most '
+                    '640 px.</p>', unsafe_allow_html=True)
+        vid = st.file_uploader("Video", type=["mp4", "mov", "avi", "mkv", "webm"], key="video_up", label_visibility="collapsed")
+        v1, v2 = st.columns(2)
+        v_frames = v1.slider("Frames to process", 10, 300, 90, key="video_frames")
+        v_smooth = v2.toggle("Smooth over time", value=True, key="video_temporal")
+        if vid is not None and st.button("Process video", type="primary", key="video_go"):
+            with tempfile.TemporaryDirectory() as td:
+                src, dst = Path(td) / ("in" + Path(vid.name).suffix), Path(td) / "out.mp4"
+                src.write_bytes(vid.getvalue())
+                bar = st.progress(0.0)
+                try:
+                    n_fr, spf = process_video(
+                        src, dst, P=current_params(), auto=st.session_state.strength_auto, temporal=v_smooth,
+                        max_dim=640, max_frames=v_frames, auto_blur=st.session_state.deblur_auto and not st.session_state.modules_only,
+                        progress=lambda i, total: bar.progress(min(1.0, i / max(total, 1))))
+                    st.session_state.video_result = (dst.read_bytes(), n_fr, spf) if n_fr else None
+                    st.session_state.video_error = None if n_fr else "No frames could be read from that file."
+                except Exception as exc:
+                    st.session_state.video_result, st.session_state.video_error = None, f"Could not process that video: {exc}"
+            bar.empty()
+        if st.session_state.get("video_error"):
+            st.error(st.session_state.video_error)
+        if st.session_state.get("video_result"):
+            vdata, n_fr, spf = st.session_state.video_result
+            st.video(vdata)
+            st.caption(f"{n_fr} frames, {spf:.2f} s per frame.")
+            st.download_button("Download video", data=vdata, file_name="dehazed_video.mp4", mime="video/mp4")
+
     with st.container(border=True, key="method_card"):
         st.markdown('<div class="card-heading">Method</div>', unsafe_allow_html=True)
         st.markdown('<p class="ufc-eq">I = J·t + A·(1 − t),&nbsp; t = e<sup>−βd</sup></p>', unsafe_allow_html=True)
@@ -1376,9 +1462,9 @@ with lower_col:
             "filter in the Fourier domain then work on luminance only."
         )
         m_l.markdown(
-            "Blur is undone with Wiener deconvolution in the Fourier domain, for a Gaussian or horizontal "
-            "motion blur whose size you set, or that the app measures from the width of the strongest edges "
-            "(*Detect the blur automatically*). *Course modules only* runs just the three project modules: "
+            "Blur is undone with Wiener deconvolution in the Fourier domain, for a Gaussian or linear "
+            "motion blur (at any angle) whose size you set, or that the app measures from the width of the strongest "
+            "edges along eight directions (*Detect the blur automatically*). *Course modules only* runs just the three project modules: "
             "frequency-domain enhancement, histogram stretching, and adaptive smoothing and sharpening. "
             "The Edges view shows the Sobel gradient of both images on one scale, so you can see how much "
             "more of the buildings and roads shows up."

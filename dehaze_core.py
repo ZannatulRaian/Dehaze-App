@@ -25,6 +25,10 @@ FREQ_CUTOFF = 30  # frequency-domain cutoff radius, in frequency-plane pixels
 P_BALANCED = dict(hist=20, freq=20, smooth=23, sharpen=37, omega=0.87, t0=0.20, patch=0, use_dcp=True,
                   deblur=0.0, deblur_kind="Gaussian", deblur_k=0.01, gamma=1.0, sat=1.0, balance=50, cutoff=60)
 P_MODULES = dict(P_BALANCED, use_dcp=False, hist=20, freq=20, smooth=20, sharpen=80, balance=0)
+# For traffic and site monitoring, where a detector or an operator looks for vehicles and people: fog removal plus
+# histogram stretching only. Frequency enhancement, sharpening and gray-world colour balance each lowered vehicle detection
+# recall on real street photos (see evaluate.py, ablation and section 2) although they raise edge counts.
+P_TRAFFIC = dict(P_BALANCED, hist=20, freq=0, smooth=0, sharpen=0, balance=0)
 
 
 def hist_clip_percent(strength):
@@ -55,11 +59,12 @@ def _from_ycc(ycc, y):
     return np.clip(rgb * 255.0 + 0.5, 0, 255).astype(np.uint8)
 
 
-def histogram_stretch(img, strength=55, return_range=False):
-    """Linear contrast stretch of the luminance, clipping `percent`% at each end."""
+def histogram_stretch(img, strength=55, return_range=False, fixed_range=None):
+    """Linear contrast stretch of the luminance, clipping `percent`% at each end. `fixed_range` = (lo, hi) uses
+    that range instead of the image's own (video uses a range smoothed over time)."""
     percent = hist_clip_percent(strength)
     ycc, y = _to_ycc(img)
-    lo, hi = np.percentile(y, [percent, 100 - percent])
+    lo, hi = fixed_range if fixed_range is not None else np.percentile(y, [percent, 100 - percent])
     if strength <= 0 or hi - lo < 1.0:
         out = img
     else:
@@ -159,6 +164,11 @@ def dark_channel_prior(img, omega=0.95, t0=0.15, patch=0):
     """Single-image haze removal (He et al.): estimate the airlight A and a
     per-pixel transmission t, then recover J = (I - A) / t + A."""
     t, A = estimate_transmission(img, omega, t0, patch)
+    return recover_scene(img, t, A)
+
+
+def recover_scene(img, t, A):
+    """J = (I - A) / t + A for a given transmission map t and airlight A."""
     J = (img.astype(np.float32) / 255.0 - A) / t[:, :, None] + A
     return np.clip(J * 255.0 + 0.5, 0, 255).astype(np.uint8)
 
@@ -181,7 +191,13 @@ def cached_dark_channel_prior(img, omega=0.95, t0=0.15, patch=0):
     return out
 
 
-def tone_adjust(img, gamma=1.0, saturation=1.0, balance=0):
+def colour_balance_gains(img, balance):
+    """Per-channel gains of the gray-world colour balance (balance = 0-100 %)."""
+    means = (img.astype(np.float32) / 255.0).reshape(-1, 3).mean(axis=0) + 1e-6
+    return (means.mean() / means) ** (balance / 100.0)
+
+
+def tone_adjust(img, gamma=1.0, saturation=1.0, balance=0, gains=None):
     """Final colour step: gray-world colour balance (0-100 %), saturation and gamma.
     Fog is bluish-grey, so a dehazed image often keeps a colour cast; the balance step pulls the
     channel means back together. All neutral values (balance 0, saturation 1, gamma 1) leave the
@@ -190,8 +206,8 @@ def tone_adjust(img, gamma=1.0, saturation=1.0, balance=0):
         return img
     f = img.astype(np.float32) / 255.0
     if balance:
-        means = f.reshape(-1, 3).mean(axis=0) + 1e-6
-        gains = (means.mean() / means) ** (balance / 100.0)
+        if gains is None:                      # `gains` lets a video reuse colour-balance gains smoothed over time
+            gains = colour_balance_gains(img, balance)
         f = np.clip(f * gains, 0.0, 1.0)
     if saturation != 1.0:
         lum = (f @ np.array([0.299, 0.587, 0.114], dtype=np.float32))[..., None]
@@ -204,18 +220,41 @@ def tone_adjust(img, gamma=1.0, saturation=1.0, balance=0):
 STAGE_ORDER = ["dcp", "deblur", "smooth", "sharpen", "hist", "freq", "tone"]   # the order they run
 
 
-def wiener_deblur(img, amount, kind="Gaussian", k=0.01):
+def motion_kernel(n, angle=0.0):
+    """Normalised line kernel of length n px at `angle` degrees (0 = horizontal, 90 = vertical, counter-clockwise
+    on screen), anti-aliased by drawing it 8x larger. Angle 0 is exactly the n-tap box used for horizontal blur."""
+    n = max(3, int(n) | 1)
+    if angle % 180.0 == 0.0:
+        kern = np.zeros((n, n), np.float32)
+        kern[n // 2, :] = 1.0 / n
+        return kern
+    big, c = n * 8, (n * 8) // 2
+    dx, dy = math.cos(math.radians(angle)) * (n * 4 - 4), -math.sin(math.radians(angle)) * (n * 4 - 4)
+    canvas = np.zeros((big, big), np.float32)
+    cv2.line(canvas, (round(c - dx), round(c - dy)), (round(c + dx), round(c + dy)), 1.0, 8, cv2.LINE_AA)
+    kern = cv2.resize(canvas, (n, n), interpolation=cv2.INTER_AREA)
+    return kern / kern.sum()
+
+
+def wiener_deblur(img, amount, kind="Gaussian", k=0.01, angle=0.0):
     """Wiener deconvolution of luminance in the Fourier domain, for an assumed Gaussian blur
-    (std = amount px) or horizontal motion blur (length = 3 x amount px). k damps noise."""
+    (std = amount px) or linear motion blur (length = 3 x amount px, at `angle` degrees, 0 = horizontal).
+    k damps noise."""
     if amount <= 0:
         return img
     ycc = cv2.cvtColor(img, cv2.COLOR_RGB2YCrCb)
     y = ycc[..., 0].astype(np.float32) / 255.0
-    pad = int(4 * amount) + 8
+    pad = int(4 * amount * (1.5 if kind == "Motion" and angle % 180.0 else 1.0)) + 8
     yp = cv2.copyMakeBorder(y, pad, pad, pad, pad, cv2.BORDER_REFLECT_101)
     fy = np.fft.fftfreq(yp.shape[0])[:, None]
     fx = np.fft.fftfreq(yp.shape[1])[None, :]
-    if kind == "Motion":
+    if kind == "Motion" and angle % 180.0 != 0.0:
+        kern = motion_kernel(int(round(3 * amount)), angle)
+        psf = np.zeros(yp.shape, np.float32)
+        kh, kw = kern.shape
+        psf[:kh, :kw] = kern
+        H = np.real(np.fft.fft2(np.roll(psf, (-(kh // 2), -(kw // 2)), axis=(0, 1))))   # centred kernel -> real response
+    elif kind == "Motion":
         n = max(3, int(round(3 * amount)) | 1)
         with np.errstate(divide="ignore", invalid="ignore"):
             h1 = np.where(fx == 0, 1.0, np.sin(np.pi * n * fx) / (n * np.sin(np.pi * fx)))
@@ -228,11 +267,46 @@ def wiener_deblur(img, amount, kind="Gaussian", k=0.01):
     return cv2.cvtColor(ycc, cv2.COLOR_YCrCb2RGB)
 
 
+
+# ---------------------------------------------------------------- haze level and automatic strength
+HAZE_SLOPE, HAZE_OFFSET, STRENGTH_MIN = 2.1, 0.35, 0.25   # strength = clip(2.1 * haze - 0.35, 0.25, 1); fit in evaluate.py
+
+
+def haze_level(img):
+    """How hazy a photo is, 0 (clear) .. 1: 1 - mean dark-channel transmission. It rises with fog density in every
+    kind of scene tested, but its level differs between scenes, so it is used to scale the processing strength
+    (strength_scale) rather than read as a fog density."""
+    t, _ = estimate_transmission(img, 0.95, 0.05, 0)
+    return float(1.0 - t.mean())
+
+
+def strength_scale(haze):
+    """Share of the base strength to apply: 0.25 on a near-clear photo up to 1.0 (the full default) in dense fog."""
+    return float(np.clip(HAZE_SLOPE * haze - HAZE_OFFSET, STRENGTH_MIN, 1.0))
+
+
+def auto_strength_params(img, P=None, haze=None):
+    """Copy of the settings P (default: Balanced) with the strengths of histogram stretching, frequency enhancement,
+    smoothing, sharpening and the dark channel's omega scaled to the photo's haze level. Returns (settings, haze, scale).
+    Fitted so that light haze is not over-processed: fixed settings tuned for dense fog lower SSIM on light fog."""
+    P = dict(P_BALANCED if P is None else P)
+    h = haze_level(img) if haze is None else haze        # `haze`: a level already measured (the app caches it)
+    g = strength_scale(h)
+    for k in ("hist", "freq", "smooth", "sharpen"):
+        P[k] = P[k] * g
+    if P["use_dcp"]:
+        P["omega"] = min(0.95, P["omega"] * (0.35 + 0.65 * g))
+    return P, h, g
+
+
 # ---------------------------------------------------------------- blur estimation
-BLUR_BASELINE = 0.65   # edge spread (px, std) of a sharp photo at the app's working size
+BLUR_DIRECTIONS = 8    # profile directions measured, every 22.5 degrees
+BLUR_BASELINE_AXIS, BLUR_BASELINE_DIAG = 0.65, 0.72   # edge spread (px, std) of a sharp photo along / between the image axes
 BLUR_MIN = 0.7         # excess spread (px) below which an image is called sharp
-GAUSS_SCALE = 1.15     # Gaussian estimates read ~13 % low (tails of the edge profile are cut); fit on the 7 real
-                       # photos only, so the synthetic cities stay an independent check (see evaluate.py)
+BLUR_ANISOTROPY = 0.32  # 1 - mean/peak of the excess variance: above it the blur is directional (motion), below it round
+GAUSS_SCALE = 1.08     # calibration factors: the raw estimates read about 8 % (Gaussian) and 10 % (motion) low
+MOTION_SCALE = 1.10    # (the tails of the edge profile are cut); fit on the 7 real photos only, so the synthetic
+                       # cities stay an independent check (see evaluate.py, blur estimation)
 
 
 def _edge_spread(L, axis, top=0.08, reach=30):
@@ -269,39 +343,58 @@ def _edge_spread(L, axis, top=0.08, reach=30):
     return float(np.median(np.sqrt(np.maximum(m2 / m0 - c * c, 0.0))))
 
 
+def _spread_along(L, angle):
+    """Edge spread of intensity profiles measured along direction `angle` (degrees, 0 = along x, counter-clockwise
+    on screen); other directions than the axes are measured on the image rotated so that direction is horizontal."""
+    if angle % 180.0 == 0.0:
+        return _edge_spread(L, 1)
+    if angle % 180.0 == 90.0:
+        return _edge_spread(L, 0)
+    h, w = L.shape
+    M = cv2.getRotationMatrix2D((w / 2.0, h / 2.0), -angle, 1.0)
+    return _edge_spread(cv2.warpAffine(L, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101), 1)
+
+
 def estimate_blur(img):
     """Blind estimate of the blur in a photo, in the units `wiener_deblur` and `simulate_blur` use.
 
-    Measures how wide the strongest edges are, horizontally and vertically, and subtracts the width of
-    a sharp photo (BLUR_BASELINE) in quadrature. Similar excess in both directions means Gaussian
-    (amount = sigma); excess in one direction only means directional motion blur (amount = box length / 3).
-    Returns {"kind": "none" | "Gaussian" | "Motion" | "Motion (vertical)", "amount": px,
-    "sigma_x": px, "sigma_y": px}; vertical motion is detected but `wiener_deblur` cannot undo it."""
+    The spread of the strongest edges is measured along 8 directions and the width of a sharp photo is
+    subtracted in quadrature. A blur that is as wide in every direction is Gaussian (amount = sigma); one with a
+    clear peak in one direction is linear motion blur: the peak's direction (refined between the measured
+    directions) is the angle and its excess spread gives the length (amount = length / 3).
+    Returns {"kind": "none" | "Gaussian" | "Motion", "amount": px, "angle": degrees (motion only, 0 = horizontal,
+    90 = vertical), "spreads": the 8 measured spreads}."""
     L = _lum(img)
-    sx, sy = _edge_spread(L, 1), _edge_spread(L, 0)
-    out = {"kind": "none", "amount": 0.0, "sigma_x": sx, "sigma_y": sy}
-    if sx is None or sy is None:
+    n = BLUR_DIRECTIONS
+    angles = [k * 180.0 / n for k in range(n)]
+    sp = [_spread_along(L, a) for a in angles]
+    out = {"kind": "none", "amount": 0.0, "angle": 0.0, "spreads": sp}
+    if any(x is None for x in sp):
         return out
-    ex = math.sqrt(max(sx * sx - BLUR_BASELINE ** 2, 0.0))
-    ey = math.sqrt(max(sy * sy - BLUR_BASELINE ** 2, 0.0))
-    if max(ex, ey) < BLUR_MIN:
+    base = np.array([BLUR_BASELINE_AXIS if a % 90.0 == 0.0 else BLUR_BASELINE_DIAG for a in angles])
+    v = np.maximum(np.array(sp) ** 2 - base ** 2, 0.0)             # excess variance per direction
+    k = int(v.argmax())
+    vm, v0, vp = v[(k - 1) % n], v[k], v[(k + 1) % n]
+    den = vm - 2.0 * v0 + vp
+    off = float(np.clip(0.5 * (vm - vp) / den, -0.5, 0.5)) if den < 0 else 0.0   # parabola through the peak
+    peak = v0 - 0.25 * (vm - vp) * off if den < 0 else v0
+    if math.sqrt(max(peak, 0.0)) < BLUR_MIN:
         return out
-    if ex >= 1.7 * ey:                            # blurred along x only: box of length n, std n/sqrt(12), n = 3 * amount
-        out.update(kind="Motion", amount=ex * math.sqrt(12.0) / 3.0)
-    elif ey >= 1.7 * ex:
-        out.update(kind="Motion (vertical)", amount=ey * math.sqrt(12.0) / 3.0)
+    if 1.0 - v.mean() / peak >= BLUR_ANISOTROPY:                    # directional: linear motion blur
+        out.update(kind="Motion", angle=round(((k + off) * 180.0 / n) % 180.0, 1),
+                   amount=MOTION_SCALE * math.sqrt(12.0 * peak) / 3.0)   # box of length L: variance L^2/12, L = 3 * amount
     else:
-        out.update(kind="Gaussian", amount=GAUSS_SCALE * math.sqrt(0.5 * (ex * ex + ey * ey)))
+        out.update(kind="Gaussian", amount=GAUSS_SCALE * math.sqrt(v.mean()))
     out["amount"] = round(out["amount"], 2)
     return out
 
 
 def auto_deblur_params(img, P):
     """Copy of the settings P with the Wiener deblur set from `estimate_blur(img)`
-    (switched off when the photo looks sharp or the blur is one the deblur can't undo)."""
+    (switched off when the photo looks sharp)."""
     est = estimate_blur(img)
     if est["kind"] in ("Gaussian", "Motion"):
-        return dict(P, deblur=est["amount"], deblur_kind=est["kind"]), est
+        return dict(P, deblur=est["amount"], deblur_kind=est["kind"], deblur_angle=est["angle"]), est
     return dict(P, deblur=0.0), est
 
 
@@ -309,7 +402,7 @@ def apply_stage(name, img, P):
     if name == "dcp":
         return cached_dark_channel_prior(img, P["omega"], P["t0"], P["patch"]) if P["use_dcp"] else img
     if name == "deblur":
-        return wiener_deblur(img, P["deblur"], P["deblur_kind"], P["deblur_k"])
+        return wiener_deblur(img, P["deblur"], P["deblur_kind"], P["deblur_k"], P.get("deblur_angle", 0.0))
     if name == "smooth":
         return adaptive_smoothing(img, P["smooth"])
     if name == "sharpen":
@@ -397,6 +490,32 @@ def make_urban_set(n=6, w=640, h=400):
     return [make_sample_scene(w, h, seed=11 + i, lane_lines=True) for i in range(n)]
 
 
+def make_traffic_clip(n=30, w=640, h=400, seed=11, cars=3):
+    """A short clip of a fixed street camera: the synthetic city (with lane lines) and `cars` cars driving across the
+    road at different speeds. Returns (clear frames, depth map); the depth of the static scene is reused for the cars
+    (they drive on the road, so each pixel keeps the road's depth). Frames are RGB uint8."""
+    base, depth = make_sample_scene(w, h, seed=seed, lane_lines=True)
+    rnd = random.Random(seed + 100)
+    specs = []
+    for i in range(cars):
+        y = int(h * (0.72 + 0.09 * i))                       # lower on screen = nearer = bigger
+        cw = int(w * (0.07 + 0.04 * i))
+        specs.append(dict(y=y, w=cw, h=int(cw * 0.5), x0=rnd.uniform(0, w), v=(3.0 + 2.0 * i) * (1 if i % 2 == 0 else -1),
+                          color=[(180, 40, 40), (40, 70, 160), (200, 200, 205)][i % 3]))
+    frames = []
+    for f in range(n):
+        im = base.copy()
+        for c in specs:
+            x = int((c["x0"] + c["v"] * f) % (w + c["w"])) - c["w"] // 2
+            y0 = c["y"] - c["h"]
+            cv2.rectangle(im, (x, y0), (x + c["w"], c["y"]), c["color"], -1)
+            cv2.rectangle(im, (x + c["w"] // 6, y0 + c["h"] // 8), (x + c["w"] * 5 // 6, y0 + c["h"] * 5 // 12), (30, 35, 45), -1)
+            for wx in (x + c["w"] // 5, x + c["w"] * 4 // 5):
+                cv2.circle(im, (wx, c["y"]), max(2, c["h"] // 6), (15, 15, 15), -1)
+        frames.append(im)
+    return frames, depth
+
+
 def true_transmission(depth, density):
     """Transmission the scattering model gives for a known depth map: t = exp(-beta * d)."""
     return np.exp(-float(density) * depth).astype(np.float32)
@@ -412,15 +531,12 @@ def simulate_fog(img, depth, density):
     return np.clip(img.astype(np.float32) * t + FOG_AIRLIGHT * (1 - t) + 0.5, 0, 255).astype(np.uint8)
 
 
-def simulate_blur(img, amount, kind):
-    """Camera blur: Gaussian, or horizontal motion (length = 3 x amount px)."""
+def simulate_blur(img, amount, kind, angle=0.0):
+    """Camera blur: Gaussian, or linear motion (length = 3 x amount px, at `angle` degrees, 0 = horizontal)."""
     if amount <= 0:
         return img
     if kind == "Motion":
-        n = max(3, int(round(3 * amount)) | 1)
-        kern = np.zeros((n, n), np.float32)
-        kern[n // 2, :] = 1.0 / n
-        return cv2.filter2D(img, -1, kern, borderType=cv2.BORDER_REFLECT_101)
+        return cv2.filter2D(img, -1, motion_kernel(int(round(3 * amount)), angle), borderType=cv2.BORDER_REFLECT_101)
     return cv2.GaussianBlur(img, (0, 0), float(amount))
 
 
@@ -436,6 +552,26 @@ def edge_maps(a, b):
 
 def _lum(img):
     return cv2.cvtColor(img, cv2.COLOR_RGB2GRAY).astype(np.float32)
+
+
+def visibility_metrics(orig, restored, contrast=0.05):
+    """No-reference visibility indicators for fog removal (Hautiere et al.), comparing a restored image with the
+    foggy original it came from. Visible edges are pixels whose 3x3 neighbourhood spans at least 5 % of the range.
+    e: relative gain in visible edges, (n_restored - n_orig) / n_orig.
+    r: geometric mean of the gradient ratio restored/original on the restored image's visible edges (> 1 = contrast gained).
+    sigma: share of pixels that are black or white in the restored image but were not in the original (clipping)."""
+    lo, hi = _lum(orig), _lum(restored)
+    def visible(L):
+        k = np.ones((3, 3), np.uint8)
+        return (cv2.dilate(L, k) - cv2.erode(L, k)) >= contrast * 255.0
+    vo, vr = visible(lo), visible(hi)
+    n0, nr = int(vo.sum()), int(vr.sum())
+    grad = lambda L: np.hypot(cv2.Sobel(L, cv2.CV_32F, 1, 0, ksize=3), cv2.Sobel(L, cv2.CV_32F, 0, 1, ksize=3))
+    go, gr = grad(lo), grad(hi)
+    ratio = (gr[vr] + 1e-3) / (go[vr] + 1e-3)
+    clip = lambda L: (L <= 1) | (L >= 254)
+    return {"e": (nr - n0) / max(n0, 1), "r": float(np.exp(np.log(ratio).mean())) if nr else float("nan"),
+            "sigma": float((clip(hi) & ~clip(lo)).mean())}
 
 
 def quality_metrics(img):
