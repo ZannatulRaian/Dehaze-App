@@ -1378,9 +1378,19 @@ with lower_col:
         st.markdown('<p class="ufc-cap">Run several photos through the pipeline with the current settings, '
                     'for example frames from a traffic camera or site-inspection photos. Every photo is '
                     'treated as already foggy.</p>', unsafe_allow_html=True)
+        def _clear_batch():                      # a new uploader key drops every uploaded file at once
+            st.session_state.batch_round = st.session_state.get("batch_round", 0) + 1
+            st.session_state.batch_results = []
         batch_files = st.file_uploader("Photos to process", accept_multiple_files=True,
-                                       key="batch_up", label_visibility="collapsed")
-        if batch_files and st.button("Process batch", type="primary"):
+                                       key=f"batch_up_{st.session_state.get('batch_round', 0)}",
+                                       label_visibility="collapsed")
+        if batch_files or st.session_state.get("batch_results"):
+            run_col, clear_col, _sp = st.columns([1, 1, 3])
+            run = run_col.button("Process batch", type="primary", disabled=not batch_files)
+            clear_col.button("Clear all", on_click=_clear_batch, help="Remove every uploaded photo and the results")
+        else:
+            run = False
+        if batch_files and run:
             P_b, results, bar = current_params(), [], st.progress(0.0)
             for i, f in enumerate(batch_files):
                 try:
