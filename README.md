@@ -41,16 +41,17 @@
 
 The project asks for three modules, and all three are implemented as separate stages with their own controls:
 
-| Project requirement | Where it is in the app |
-| --- | --- |
-| Frequency-domain enhancement (edge sharpening) | Stage 04: FFT high-frequency emphasis with a Gaussian high-pass |
-| Histogram stretching | Stage 03: percentile stretch of luminance |
-| Adaptive smoothing and sharpening | Stages 05 and 06: edge-preserving smoothing, then capped unsharp masking |
-| Simulate foggy images | Input stage: fog from the atmospheric scattering model, plus optional Gaussian or motion blur |
-| Or use real ones | Upload any photo (tick *Photo is already foggy*); the bundled outdoor test photos come with clear references that `evaluate.py` uses, and `assets/test images/urban_synthetic/` adds synthetic city streets with clear versions and true depth maps |
-| Make urban structures more visible | **Edges** view, edge-pixel and gradient measurements, Canny edge and Hough line counts, before/after histograms |
-| Blurred or foggy view | Fog removal (dark channel prior) and Wiener deblurring with automatic blur-size estimation (stage 02) |
-| Traffic monitoring, construction inspection | **Traffic monitoring** preset, **Batch Processing** card (many photos, ZIP download) and **Video** card (temporal smoothing) |
+
+| Project requirement                            | Where it is in the app                                                                                                                                                                                                                             |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frequency-domain enhancement (edge sharpening) | Stage 04: FFT high-frequency emphasis with a Gaussian high-pass                                                                                                                                                                                    |
+| Histogram stretching                           | Stage 03: percentile stretch of luminance                                                                                                                                                                                                          |
+| Adaptive smoothing and sharpening              | Stages 05 and 06: edge-preserving smoothing, then capped unsharp masking                                                                                                                                                                           |
+| Simulate foggy images                          | Input stage: fog from the atmospheric scattering model, plus optional Gaussian or motion blur                                                                                                                                                      |
+| Or use real ones                               | Upload any photo (tick*Photo is already foggy*); the bundled outdoor test photos come with clear references that `evaluate.py` uses, and `assets/test images/urban_synthetic/` adds synthetic city streets with clear versions and true depth maps |
+| Make urban structures more visible             | **Edges** view, edge-pixel and gradient measurements, Canny edge and Hough line counts, before/after histograms                                                                                                                                    |
+| Blurred or foggy view                          | Fog removal (dark channel prior) and Wiener deblurring with automatic blur-size estimation (stage 02)                                                                                                                                              |
+| Traffic monitoring, construction inspection    | **Traffic monitoring** preset, **Batch Processing** card (many photos, ZIP download) and **Video** card (temporal smoothing)                                                                                                                       |
 
 The **Course modules only** switch runs just the three project modules, so their effect can be shown on its own. The **Dark Channel Prior** and the optional **Wiener deblur** are additions that handle fog and blur, which the three modules alone cannot remove.
 
@@ -63,6 +64,7 @@ The **Course modules only** switch runs just the three project modules, so their
 Everything is on the main page (no sidebar), under the pixel-art header strip.
 
 **Preview card** (left)
+
 - Upload a photo by dropping it on the box. **Change Image** starts over.
 - **View** switch:
   - **Side by side** — original and dehazed.
@@ -74,6 +76,7 @@ Everything is on the main page (no sidebar), under the pixel-art header strip.
 - The card stays in view while you scroll the pipeline controls.
 
 **Enhancement Pipeline card** (right)
+
 - **00 Input** — *Photo is already foggy*, simulated fog density, simulated blur (Gaussian or motion at any angle), and the **Course modules only** switch.
 - **01 Dark Channel Prior** — on/off, haze removed (ω), minimum transmission (t₀), patch size.
 - **02 Deblur (Wiener)** — blur to undo (0 = off), blur type, noise damping, or **Detect the blur automatically**, which measures the blur type and size from the photo and shows what it found.
@@ -91,15 +94,16 @@ Everything is on the main page (no sidebar), under the pixel-art header strip.
 
 The pipeline (in `dehaze_core.py`) runs in this order; the numbers in brackets are the stage numbers shown in the app:
 
-| Step | Stage | What it does |
-| ---- | ----- | ------------ |
-| 1 | **Dark Channel Prior** [01] (on by default) | Estimates the airlight and a per-pixel transmission map, refined with a **guided filter** so it follows real edges, then recovers the haze-free scene `J = (I − A) / t + A` |
-| 2 | **Deblur (Wiener)** [02] (off at 0) | Wiener deconvolution of luminance in the Fourier domain for a Gaussian or linear motion blur (any angle) whose size you set or that `estimate_blur` measures; mirror padding and a noise-damping term limit ringing |
-| 3 | **Adaptive Smoothing** [05] | Edge-preserving bilateral filter; smooths flat areas and the noise fog removal amplifies, keeps edges |
-| 4 | **Adaptive Sharpening** [06] | Unsharp mask on luminance with the added detail capped, so strong edges don't overshoot into halos |
-| 5 | **Histogram Stretch** [03] | Linear contrast stretch of luminance, clipping 0–2 % from each end |
-| 6 | **Frequency-Domain Filter** [04] | FFT high-frequency emphasis with a smooth Gaussian high-pass (no ringing) and mirror padding (no border wrap-around) |
-| 7 | **Final Tone** [07] | Optional gray-world colour balance, saturation and gamma |
+
+| Step | Stage                                       | What it does                                                                                                                                                                                                       |
+| ---- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1    | **Dark Channel Prior** [01] (on by default) | Estimates the airlight and a per-pixel transmission map, refined with a**guided filter** so it follows real edges, then recovers the haze-free scene `J = (I − A) / t + A`                                        |
+| 2    | **Deblur (Wiener)** [02] (off at 0)         | Wiener deconvolution of luminance in the Fourier domain for a Gaussian or linear motion blur (any angle) whose size you set or that`estimate_blur` measures; mirror padding and a noise-damping term limit ringing |
+| 3    | **Adaptive Smoothing** [05]                 | Edge-preserving bilateral filter; smooths flat areas and the noise fog removal amplifies, keeps edges                                                                                                              |
+| 4    | **Adaptive Sharpening** [06]                | Unsharp mask on luminance with the added detail capped, so strong edges don't overshoot into halos                                                                                                                 |
+| 5    | **Histogram Stretch** [03]                  | Linear contrast stretch of luminance, clipping 0–2 % from each end                                                                                                                                                |
+| 6    | **Frequency-Domain Filter** [04]            | FFT high-frequency emphasis with a smooth Gaussian high-pass (no ringing) and mirror padding (no border wrap-around)                                                                                               |
+| 7    | **Final Tone** [07]                         | Optional gray-world colour balance, saturation and gamma                                                                                                                                                           |
 
 **Design notes**
 
@@ -115,39 +119,42 @@ The first version of the defaults over-processed: on the seven real foggy test s
 
 `python evaluate.py` re-runs everything and writes `results/` (CSV files, `summary.md`, comparison images; about 5 minutes). Every method is measured against the clear photo of each scene. There are four kinds of test data:
 
-| Test data | What it is | What it can and cannot show |
-| --- | --- | --- |
-| **Real fog** | 7 hazy garden and park photos, each with a clear reference | Real fog, but not city streets |
-| **Real streets** | 9 clear photos of real streets (`python get_street_photos.py` downloads 8 from the Mask R-CNN sample images; one is bundled), fogged with the scattering model and a rough depth guess | Real street content (cars, people, buildings), but simulated fog |
-| **Synthetic streets** | 6 renders in `assets/test images/urban_synthetic/` (buildings, cars, lane lines) with a clear version and the **true depth map** | Exact ground truth; clean flat colours flatter edge detection |
-| **Synthetic traffic clip** | 30 frames, fixed camera, 3 cars, fog from the true depth, sensor noise | Video behaviour |
+
+| Test data                  | What it is                                                                                                                                                                             | What it can and cannot show                                      |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| **Real fog**               | 7 hazy garden and park photos, each with a clear reference                                                                                                                             | Real fog, but not city streets                                   |
+| **Real streets**           | 9 clear photos of real streets (`python get_street_photos.py` downloads 8 from the Mask R-CNN sample images; one is bundled), fogged with the scattering model and a rough depth guess | Real street content (cars, people, buildings), but simulated fog |
+| **Synthetic streets**      | 6 renders in`assets/test images/urban_synthetic/` (buildings, cars, lane lines) with a clear version and the **true depth map**                                                        | Exact ground truth; clean flat colours flatter edge detection    |
+| **Synthetic traffic clip** | 30 frames, fixed camera, 3 cars, fog from the true depth, sensor noise                                                                                                                 | Video behaviour                                                  |
 
 **No real hazy/clear photo pairs of city streets are bundled**, because none were available. To use some, put `name_hazy.jpg` and `name_clear_reference.jpg` in `assets/test images/urban_with_clear_reference/`; `evaluate.py` adds a section for them.
 
 ### Visibility and fidelity (SSIM and PSNR against the clear photo)
 
-| Method | Real fog: SSIM | PSNR | Real streets, fog 1.6: SSIM | PSNR | Synthetic streets: SSIM | PSNR |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Foggy input | 0.674 | 13.7 | 0.645 | 10.9 | 0.754 | 12.2 |
-| The three course modules together | 0.684 | 13.7 | 0.759 | 14.2 | 0.696 | 12.2 |
-| Dark channel prior only | 0.769 | 17.0 | 0.905 | 19.2 | 0.871 | 21.8 |
-| Full pipeline (Balanced default) | 0.706 | 15.9 | 0.866 | 18.8 | 0.793 | 19.4 |
-| Full pipeline, strength set from the haze level | 0.718 | 15.5 | 0.860 | 18.2 | 0.837 | 17.4 |
-| Traffic monitoring preset | 0.739 | 15.1 | 0.918 | 20.0 | 0.866 | 20.2 |
+
+| Method                                          | Real fog: SSIM | PSNR | Real streets, fog 1.6: SSIM | PSNR | Synthetic streets: SSIM | PSNR |
+| ----------------------------------------------- | -------------: | ---: | --------------------------: | ---: | ----------------------: | ---: |
+| Foggy input                                     |          0.674 | 13.7 |                       0.645 | 10.9 |                   0.754 | 12.2 |
+| The three course modules together               |          0.684 | 13.7 |                       0.759 | 14.2 |                   0.696 | 12.2 |
+| Dark channel prior only                         |          0.769 | 17.0 |                       0.905 | 19.2 |                   0.871 | 21.8 |
+| Full pipeline (Balanced default)                |          0.706 | 15.9 |                       0.866 | 18.8 |                   0.793 | 19.4 |
+| Full pipeline, strength set from the haze level |          0.718 | 15.5 |                       0.860 | 18.2 |                   0.837 | 17.4 |
+| Traffic monitoring preset                       |          0.739 | 15.1 |                       0.918 | 20.0 |                   0.866 | 20.2 |
 
 ### Impact test: what standard detectors find before and after
 
 Canny (fixed 50/150) and a Hough line detector are run on each result and compared with what they find in the clear photo. **Edge F1** (2 px tolerance) and **line recall** are the numbers to read; raw counts rise with texture and noise too. On the real streets a **YOLOv5n** detector (`detect.py`, evaluation only, weights downloaded on first use, AGPL licence) also counts vehicles and people; *detection recall* is the share of what it finds in the clear photo that it still finds (IoU 0.5).
 
-| Method | Real fog: edge F1 | line recall | Real streets: edge F1 | line recall | vehicles/people found (clear photo: 11.9) | detection recall |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Foggy input | 0.155 | 0.039 | 0.446 | 0.083 | 9.8 | 0.714 |
-| Histogram stretching only | 0.642 | 0.443 | 0.819 | 0.407 | 11.0 | 0.831 |
-| The three course modules together | 0.661 | 0.513 | 0.854 | 0.527 | 8.8 | 0.699 |
-| Dark channel prior only | 0.441 | 0.150 | 0.874 | 0.430 | 11.2 | 0.881 |
-| Full pipeline (Balanced default) | 0.645 | 0.551 | 0.889 | 0.652 | 9.9 | 0.725 |
-| Full pipeline, strength set from the haze level | 0.664 | 0.509 | 0.900 | 0.607 | 10.0 | 0.747 |
-| **Traffic monitoring preset** | 0.674 | 0.434 | **0.924** | 0.578 | **11.6** | **0.895** |
+
+| Method                                          | Real fog: edge F1 | line recall | Real streets: edge F1 | line recall | vehicles/people found (clear photo: 11.9) | detection recall |
+| ----------------------------------------------- | ----------------: | ----------: | --------------------: | ----------: | ----------------------------------------: | ---------------: |
+| Foggy input                                     |             0.155 |       0.039 |                 0.446 |       0.083 |                                       9.8 |            0.714 |
+| Histogram stretching only                       |             0.642 |       0.443 |                 0.819 |       0.407 |                                      11.0 |            0.831 |
+| The three course modules together               |             0.661 |       0.513 |                 0.854 |       0.527 |                                       8.8 |            0.699 |
+| Dark channel prior only                         |             0.441 |       0.150 |                 0.874 |       0.430 |                                      11.2 |            0.881 |
+| Full pipeline (Balanced default)                |             0.645 |       0.551 |                 0.889 |       0.652 |                                       9.9 |            0.725 |
+| Full pipeline, strength set from the haze level |             0.664 |       0.509 |                 0.900 |       0.607 |                                      10.0 |            0.747 |
+| **Traffic monitoring preset**                   |             0.674 |       0.434 |             **0.924** |       0.578 |                                  **11.6** |        **0.895** |
 
 Findings:
 
@@ -160,14 +167,15 @@ Findings:
 
 Each row removes one part of the Balanced pipeline (`summary.md`, section 6):
 
-| Pipeline | Real fog SSIM / F1 | Real streets SSIM / F1 | Detection recall |
-| --- | ---: | ---: | ---: |
-| Full pipeline | 0.706 / 0.645 | 0.866 / 0.889 | 0.725 |
-| without histogram stretching | 0.766 / 0.689 | 0.870 / 0.903 | 0.725 |
-| without frequency-domain enhancement | 0.729 / 0.688 | 0.892 / 0.918 | 0.732 |
-| without adaptive smoothing + sharpening | 0.710 / 0.668 | 0.908 / 0.919 | 0.782 |
-| without all three modules | 0.783 / **0.491** | 0.906 / 0.871 | 0.839 |
-| without the dark channel prior | 0.687 / 0.685 | **0.768** / 0.856 | 0.735 |
+
+| Pipeline                                | Real fog SSIM / F1 | Real streets SSIM / F1 | Detection recall |
+| --------------------------------------- | -----------------: | ---------------------: | ---------------: |
+| Full pipeline                           |      0.706 / 0.645 |          0.866 / 0.889 |            0.725 |
+| without histogram stretching            |      0.766 / 0.689 |          0.870 / 0.903 |            0.725 |
+| without frequency-domain enhancement    |      0.729 / 0.688 |          0.892 / 0.918 |            0.732 |
+| without adaptive smoothing + sharpening |      0.710 / 0.668 |          0.908 / 0.919 |            0.782 |
+| without all three modules               |   0.783 /**0.491** |          0.906 / 0.871 |            0.839 |
+| without the dark channel prior          |      0.687 / 0.685 |      **0.768** / 0.856 |            0.735 |
 
 The honest reading: the **dark channel prior carries fidelity** (remove it and street SSIM falls 0.866 to 0.768) and the **three modules carry visibility** (remove them and real-fog edge F1 falls 0.645 to 0.491). Neither replaces the other. Each module on its own pushes edge counts up, but **in the combined pipeline most of them reduce SSIM and detection recall slightly**; that is the price of visibility, and why the app offers presets from *Fog removal only* to *Maximum detail*.
 
@@ -175,11 +183,12 @@ The honest reading: the **dark channel prior carries fidelity** (remove it and s
 
 The Balanced strengths are tuned for dense fog. The app can scale them from the **haze level** of the photo (`haze_level` = 1 - mean dark-channel transmission): `strength = clip(2.1 x haze - 0.35, 0.25, 1)`. With simulated fog at five densities (SSIM, fixed default → adaptive):
 
-| Scene type | Fog 0.4 | Fog 0.8 | Fog 1.6 | Fog 3.2 |
-| --- | ---: | ---: | ---: | ---: |
-| 7 garden photos | 0.785 → 0.899 | 0.797 → 0.860 | 0.805 → 0.811 | 0.731 → 0.731 |
+
+| Scene type        |        Fog 0.4 |        Fog 0.8 |        Fog 1.6 |        Fog 3.2 |
+| ----------------- | -------------: | -------------: | -------------: | -------------: |
+| 7 garden photos   | 0.785 → 0.899 | 0.797 → 0.860 | 0.805 → 0.811 | 0.731 → 0.731 |
 | Synthetic streets | 0.690 → 0.944 | 0.746 → 0.899 | 0.793 → 0.837 | 0.770 → 0.773 |
-| 9 real streets | 0.849 → 0.941 | 0.864 → 0.907 | 0.866 → 0.860 | 0.788 → 0.788 |
+| 9 real streets    | 0.849 → 0.941 | 0.864 → 0.907 | 0.866 → 0.860 | 0.788 → 0.788 |
 
 The rule was then **fit with one scene type held out** (`python evaluate.py --fit-strength`); on every held-out type it beat the fixed default (scores 1.210 → 1.252, 1.215 → 1.301, 1.294 → 1.337; the per-image best, which needs the clear photo, is 1.283, 1.342, 1.418). The fit on all types gives slightly steeper constants (2.4 and 0.45) than the shipped 2.1 and 0.35, which were fit on an earlier, smaller run. On the **7 real fog photos**, which were not used for fitting, the gain is small and mixed: SSIM 0.706 → 0.718, PSNR 15.9 → 15.5 dB, edge F1 0.645 → 0.664.
 
@@ -191,11 +200,12 @@ Leave-one-scene-out on real fog (60 random settings; best on six scenes applied 
 
 `estimate_blur` measures the width of the strongest edges along **8 directions**, subtracts the width of a sharp photo in quadrature and reports the kind (Gaussian, or motion with its angle) and size. Gaussian and motion blur are told apart by how uneven the excess is across directions; the motion angle comes from a parabola fit to the directional peak. Fog scales an edge's step and gradient alike, so the estimate does not depend on fog density. `wiener_deblur` accepts any angle. Calibration was fit on the real photos only; the synthetic cities are the independent check.
 
-| True blur | Real photos: estimate (px) | kind right | Synthetic cities: estimate (px) | kind right |
-| --- | ---: | ---: | ---: | ---: |
-| none (fog 0, 1.6, 3) | 0.00 | 100 % | 0.00 | 100 % |
-| Gaussian 1 / 2 / 3 / 4 px | 0.84 / 2.00 / 3.16 / 4.14 | 86 / 100 / 100 / 100 % | 1.06 / 1.78 / 2.47 / 3.48 | 100 % |
-| Motion 1 / 2 / 3 / 4 px (7 angles) | 0.53 / 2.13 / 2.70 / 3.59 | 47 / 100 / 100 / 100 % | 1.05 / 2.13 / 2.52 / 2.98 | 100 % |
+
+| True blur                          | Real photos: estimate (px) |             kind right | Synthetic cities: estimate (px) | kind right |
+| ---------------------------------- | -------------------------: | ---------------------: | ------------------------------: | ---------: |
+| none (fog 0, 1.6, 3)               |                       0.00 |                  100 % |                            0.00 |      100 % |
+| Gaussian 1 / 2 / 3 / 4 px          |  0.84 / 2.00 / 3.16 / 4.14 | 86 / 100 / 100 / 100 % |       1.06 / 1.78 / 2.47 / 3.48 |      100 % |
+| Motion 1 / 2 / 3 / 4 px (7 angles) |  0.53 / 2.13 / 2.70 / 3.59 | 47 / 100 / 100 / 100 % |       1.05 / 2.13 / 2.52 / 2.98 |      100 % |
 
 The motion angle is found to **about 3° from 2 px up** (mean error 2.9° real, 3.4° synthetic; 0.3° to 0.5° at 0° and 90°, up to about 6° at 25°/135°). The estimator found no blur in any of the 7 real hazy photos. Using the estimate in the pipeline keeps most of the benefit (fog + 45° motion blur, SSIM 0.629 with no deblur, 0.716 with the estimate, 0.770 with the true blur).
 
@@ -203,12 +213,13 @@ The motion angle is found to **about 3° from 2 px up** (mean error 2.9° real, 
 
 `dehaze_video.py` runs the pipeline on a video file (`python dehaze_video.py foggy.mp4 clear.mp4 --auto`). Per-frame processing flickers because the airlight, the transmission map, the stretch range and the colour balance move with sensor noise. `TemporalDehazer` smooths those estimates over time, smooths the transmission map only where nothing moved (so cars are not blended into the fog estimate), and averages the sensor noise on still pixels. On the synthetic traffic clip (flicker = mean frame-to-frame change of the output on static pixels, in grey levels):
 
-| Processing | Flicker | PSNR (dB) | SSIM |
-| --- | ---: | ---: | ---: |
-| Foggy input | 1.54 | 12.4 | 0.747 |
-| Every frame on its own | 1.19 | 19.7 | 0.816 |
-| **Temporal** | **0.42** | 19.7 | 0.810 |
-| Temporal, strength from haze level | 0.34 | 16.9 | 0.828 |
+
+| Processing                         |  Flicker | PSNR (dB) |  SSIM |
+| ---------------------------------- | -------: | --------: | ----: |
+| Foggy input                        |     1.54 |      12.4 | 0.747 |
+| Every frame on its own             |     1.19 |      19.7 | 0.816 |
+| **Temporal**                       | **0.42** |      19.7 | 0.810 |
+| Temporal, strength from haze level |     0.34 |      16.9 | 0.828 |
 
 That is about 65 % less flicker for the same fidelity, at about 0.09 s per 640 x 400 frame on one CPU. The app's **Video** card does this for an uploaded clip (limited frame count, H.264 output when `imageio-ffmpeg` is installed).
 
@@ -304,7 +315,7 @@ Dehaze-App/
 
 ## Author
 
-**Zannatul Raian** · [@ZannatulRaian](https://github.com/ZannatulRaian)
+[ZannatulRaian](https://github.com/ZannatulRaian)
 
 ## Update — local contrast, adaptive fog removal, colour restoration
 
