@@ -2,7 +2,7 @@
 evaluated on its own (see evaluate.py).
 
 Stages (run order): dark channel prior -> Wiener deblur -> adaptive smoothing -> adaptive
-sharpening -> histogram stretching -> frequency-domain enhancement -> final tone.
+sharpening -> histogram stretching -> CLAHE -> frequency-domain enhancement -> final tone.
 The three course modules are histogram stretching, frequency-domain enhancement, and
 adaptive smoothing + sharpening. Every stage returns its input untouched at strength 0.
 """
@@ -23,12 +23,14 @@ FREQ_CUTOFF = 30  # frequency-domain cutoff radius, in frequency-plane pixels
 # balance); see evaluate.py and the README. P_MODULES is the same search with only the three
 # course modules allowed.
 P_BALANCED = dict(hist=20, freq=20, smooth=23, sharpen=37, omega=0.87, t0=0.20, patch=0, use_dcp=True,
-                  deblur=0.0, deblur_kind="Gaussian", deblur_k=0.01, gamma=1.0, sat=1.0, balance=50, cutoff=60)
-P_MODULES = dict(P_BALANCED, use_dcp=False, hist=20, freq=20, smooth=20, sharpen=80, balance=0)
+                  deblur=0.0, deblur_kind="Gaussian", deblur_k=0.01, gamma=1.0, sat=1.0, balance=50, cutoff=60,
+                  adaptive=True, clahe=15, clahe_tiles=8, restore=30)
+P_MODULES = dict(P_BALANCED, use_dcp=False, hist=20, freq=20, smooth=20, sharpen=80, balance=0,
+                 adaptive=False, clahe=0, restore=0)
 # For traffic and site monitoring, where a detector or an operator looks for vehicles and people: fog removal plus
 # histogram stretching only. Frequency enhancement, sharpening and gray-world colour balance each lowered vehicle detection
 # recall on real street photos (see evaluate.py, ablation and section 2) although they raise edge counts.
-P_TRAFFIC = dict(P_BALANCED, hist=20, freq=0, smooth=0, sharpen=0, balance=0)
+P_TRAFFIC = dict(P_BALANCED, hist=20, freq=0, smooth=0, sharpen=0, balance=0, clahe=0, restore=0)
 
 
 def hist_clip_percent(strength):
@@ -83,15 +85,45 @@ def adaptive_smoothing(img, strength=50):
     return cv2.bilateralFilter(img, 7, sigma_color, sigma_space)
 
 
+def noise_sigma(y):
+    """Immerkaer's fast noise estimate (std. dev. in grey levels) from the response of a 3x3 Laplacian-difference mask."""
+    k = np.array([[1, -2, 1], [-2, 4, -2], [1, -2, 1]], dtype=np.float32)
+    h, w = y.shape
+    r = cv2.filter2D(y.astype(np.float32), -1, k)[1:-1, 1:-1]
+    return float(np.sqrt(math.pi / 2.0) * np.abs(r).sum() / (6.0 * max(1, (h - 2) * (w - 2))))
+
+
 def adaptive_sharpening(img, strength=50):
-    """Unsharp mask on luminance, with the added detail capped so strong edges
-    don't overshoot into white halos."""
+    """Edge- and noise-aware unsharp mask on luminance. The added detail is capped (no white halos), and it is weighted
+    by a local-activity map, so real edges and textures are sharpened fully while flat areas, where fog removal
+    amplifies noise, get only a small share of it. The flat-area share also shrinks when the photo is noisy."""
     amount = edge_gain(strength)
     if amount <= 0:
         return img
     ycc, y = _to_ycc(img)
     detail = np.clip(y - cv2.GaussianBlur(y, (0, 0), 1.5), -40.0, 40.0)
-    return _from_ycc(ycc, y + amount * detail)
+    gx, gy = cv2.Sobel(y, cv2.CV_32F, 1, 0, ksize=3), cv2.Sobel(y, cv2.CV_32F, 0, 1, ksize=3)
+    activity = cv2.GaussianBlur(np.hypot(gx, gy), (0, 0), 2.0)
+    sigma = noise_sigma(y)
+    floor = float(np.clip(0.45 - 0.05 * sigma, 0.15, 0.45))             # share of the detail kept in flat areas
+    knee = 6.0 + 4.0 * sigma                                            # gradient level that counts as real structure
+    weight = floor + (1.0 - floor) * np.clip(activity / knee, 0.0, 1.0)
+    return _from_ycc(ycc, y + amount * weight * detail)
+
+
+def clahe_enhance(img, strength=50, tiles=8):
+    """CLAHE (contrast-limited adaptive histogram equalisation) on the L channel of CIELAB only, so colours are not
+    shifted. strength 0-100 sets the clip limit (1 .. 4); `tiles` is the grid size. The result is blended with the
+    input by the same strength so the slider is a smooth 'amount', and 0 returns the image untouched."""
+    if strength <= 0:
+        return img
+    clip = 1.0 + 3.0 * strength / 100.0
+    tiles = int(np.clip(tiles, 2, 32))
+    lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
+    eq = cv2.createCLAHE(clipLimit=clip, tileGridSize=(tiles, tiles)).apply(lab[:, :, 0])
+    mix = min(1.0, strength / 60.0)
+    lab[:, :, 0] = np.clip(lab[:, :, 0].astype(np.float32) * (1 - mix) + eq.astype(np.float32) * mix + 0.5, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
 
 
 def frequency_enhancement(img, strength=55, cutoff=FREQ_CUTOFF):
@@ -133,9 +165,12 @@ def _guided_filter(guide, src, radius, eps):
     return mean(a) * guide + mean(b)
 
 
-def estimate_transmission(img, omega=0.95, t0=0.15, patch=0):
+def estimate_transmission(img, omega=0.95, t0=0.15, patch=0, adaptive=False):
     """Dark-channel estimate of the airlight A and the per-pixel transmission t (guided-filter
-    refined, clipped to [t0, 1]). Returned separately so it can be checked against a known depth map."""
+    refined, clipped to [t0, 1]). Returned separately so it can be checked against a known depth map.
+    adaptive=True: the airlight is the mean of the brightest fifth of the haze candidates (not one pixel, which can be
+    a white car or a lamp), and the floor t0 is scaled to the measured haze (lower in dense fog so it is removed more
+    fully, higher in light haze so bright areas are not darkened)."""
     I = img.astype(np.float32) / 255.0
     h, w = I.shape[:2]
     size = (max(3, int(patch)) | 1) if patch else (max(3, round(max(h, w) / 80)) | 1)  # odd window; auto ~15 px at 1200 px
@@ -147,7 +182,11 @@ def estimate_transmission(img, omega=0.95, t0=0.15, patch=0):
     n = max(1, int(0.001 * dark.size))
     idx = np.argpartition(dark.ravel(), -n)[-n:]
     candidates = I.reshape(-1, 3)[idx]
-    A = np.maximum(candidates[np.argmax(candidates.sum(axis=1))], 0.1)
+    if adaptive:
+        order = np.argsort(candidates.sum(axis=1))
+        A = np.maximum(candidates[order[-max(1, len(order) // 5):]].mean(axis=0), 0.1)
+    else:
+        A = np.maximum(candidates[np.argmax(candidates.sum(axis=1))], 0.1)
 
     # Transmission, each colour channel normalised by ITS OWN airlight value.
     t = 1.0 - omega * ndimage.minimum_filter((I / A).min(axis=2), size=size)
@@ -157,13 +196,16 @@ def estimate_transmission(img, omega=0.95, t0=0.15, patch=0):
     gray = cv2.cvtColor(I, cv2.COLOR_RGB2GRAY)
     radius = max(1, min(size * 3, (min(h, w) - 1) // 2))
     t = _guided_filter(gray, t.astype(np.float32), radius, 1e-3)
+    if adaptive:
+        haze = float(np.clip(1.0 - t.mean(), 0.0, 1.0))
+        t0 = float(np.clip(t0 * np.clip(1.5 - 1.6 * haze, 0.6, 1.4), 0.04, 0.6))
     return np.clip(t, t0, 1.0), A
 
 
-def dark_channel_prior(img, omega=0.95, t0=0.15, patch=0):
+def dark_channel_prior(img, omega=0.95, t0=0.15, patch=0, adaptive=False):
     """Single-image haze removal (He et al.): estimate the airlight A and a
     per-pixel transmission t, then recover J = (I - A) / t + A."""
-    t, A = estimate_transmission(img, omega, t0, patch)
+    t, A = estimate_transmission(img, omega, t0, patch, adaptive)
     return recover_scene(img, t, A)
 
 
@@ -176,15 +218,15 @@ def recover_scene(img, t, A):
 _DCP_CACHE = OrderedDict()
 
 
-def cached_dark_channel_prior(img, omega=0.95, t0=0.15, patch=0):
+def cached_dark_channel_prior(img, omega=0.95, t0=0.15, patch=0, adaptive=False):
     """dark_channel_prior with a small LRU cache (it is the slow stage and rarely changes
     while other sliders move)."""
     key = (hashlib.blake2b(np.ascontiguousarray(img).tobytes(), digest_size=16).hexdigest(),
-           img.shape, round(float(omega), 4), round(float(t0), 4), int(patch))
+           img.shape, round(float(omega), 4), round(float(t0), 4), int(patch), bool(adaptive))
     if key in _DCP_CACHE:
         _DCP_CACHE.move_to_end(key)
         return _DCP_CACHE[key]
-    out = dark_channel_prior(img, omega, t0, patch)
+    out = dark_channel_prior(img, omega, t0, patch, adaptive)
     _DCP_CACHE[key] = out
     while len(_DCP_CACHE) > 4:
         _DCP_CACHE.popitem(last=False)
@@ -197,13 +239,36 @@ def colour_balance_gains(img, balance):
     return (means.mean() / means) ** (balance / 100.0)
 
 
-def tone_adjust(img, gamma=1.0, saturation=1.0, balance=0, gains=None):
-    """Final colour step: gray-world colour balance (0-100 %), saturation and gamma.
-    Fog is bluish-grey, so a dehazed image often keeps a colour cast; the balance step pulls the
-    channel means back together. All neutral values (balance 0, saturation 1, gamma 1) leave the
-    image untouched."""
-    if gamma == 1.0 and saturation == 1.0 and not balance:
+def colour_restore(img, strength):
+    """Colour restoration after fog removal (strength 0-100): (1) a white balance measured on the mid-tones only
+    (very bright haze and very dark shadows are left out of the grey-world average), which removes the leftover
+    blue/cyan cast, and (2) an adaptive saturation boost that is larger the more washed-out the image still is, and
+    zero when it is already colourful. Hue is not touched beyond the cast correction."""
+    if strength <= 0:
         return img
+    f = img.astype(np.float32) / 255.0
+    lum = f @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
+    mask = (lum > 0.12) & (lum < 0.88)
+    means = (f[mask].mean(axis=0) if mask.sum() > 100 else f.reshape(-1, 3).mean(axis=0)) + 1e-6
+    gains = np.clip((means.mean() / means) ** (strength / 100.0), 0.8, 1.25)
+    f = np.clip(f * gains, 0.0, 1.0)
+    mx, mn = f.max(axis=2), f.min(axis=2)
+    mean_s = float(((mx - mn) / np.maximum(mx, 1e-3)).mean())
+    sat = 1.0 + (strength / 100.0) * float(np.clip((0.35 - mean_s) / 0.35, 0.0, 1.0)) * 0.6
+    lum = (f @ np.array([0.299, 0.587, 0.114], dtype=np.float32))[..., None]
+    f = np.clip(lum + (f - lum) * sat, 0.0, 1.0)
+    return np.clip(f * 255.0 + 0.5, 0, 255).astype(np.uint8)
+
+
+def tone_adjust(img, gamma=1.0, saturation=1.0, balance=0, gains=None, restore=0):
+    """Final colour step: colour restoration, gray-world colour balance (0-100 %), saturation and gamma.
+    Fog is bluish-grey, so a dehazed image often keeps a colour cast; the balance step pulls the
+    channel means back together. All neutral values (restore 0, balance 0, saturation 1, gamma 1) leave the
+    image untouched."""
+    if gamma == 1.0 and saturation == 1.0 and not balance and not restore:
+        return img
+    if restore:
+        img = colour_restore(img, restore)
     f = img.astype(np.float32) / 255.0
     if balance:
         if gains is None:                      # `gains` lets a video reuse colour-balance gains smoothed over time
@@ -217,7 +282,16 @@ def tone_adjust(img, gamma=1.0, saturation=1.0, balance=0, gains=None):
     return np.clip(f * 255.0 + 0.5, 0, 255).astype(np.uint8)
 
 
-STAGE_ORDER = ["dcp", "deblur", "smooth", "sharpen", "hist", "freq", "tone"]   # the order they run
+def transmission_map_image(img, P):
+    """The estimated transmission map t as a colour-mapped RGB image (dark = thick haze / far away, bright = clear /
+    near), for showing how the dark channel prior judges the haze at each place. Uses the same settings as the
+    dark-channel stage."""
+    t, _ = estimate_transmission(img, P["omega"], P["t0"], P["patch"], P.get("adaptive", False))
+    g = np.clip((t - t.min()) / max(float(t.max() - t.min()), 1e-3) * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(cv2.applyColorMap(g, cv2.COLORMAP_INFERNO), cv2.COLOR_BGR2RGB)
+
+
+STAGE_ORDER = ["dcp", "deblur", "smooth", "sharpen", "hist", "clahe", "freq", "tone"]   # the order they run
 
 
 def motion_kernel(n, angle=0.0):
@@ -292,8 +366,8 @@ def auto_strength_params(img, P=None, haze=None):
     P = dict(P_BALANCED if P is None else P)
     h = haze_level(img) if haze is None else haze        # `haze`: a level already measured (the app caches it)
     g = strength_scale(h)
-    for k in ("hist", "freq", "smooth", "sharpen"):
-        P[k] = P[k] * g
+    for k in ("hist", "freq", "smooth", "sharpen", "clahe"):
+        P[k] = P.get(k, 0) * g
     if P["use_dcp"]:
         P["omega"] = min(0.95, P["omega"] * (0.35 + 0.65 * g))
     return P, h, g
@@ -400,7 +474,7 @@ def auto_deblur_params(img, P):
 
 def apply_stage(name, img, P):
     if name == "dcp":
-        return cached_dark_channel_prior(img, P["omega"], P["t0"], P["patch"]) if P["use_dcp"] else img
+        return cached_dark_channel_prior(img, P["omega"], P["t0"], P["patch"], P.get("adaptive", False)) if P["use_dcp"] else img
     if name == "deblur":
         return wiener_deblur(img, P["deblur"], P["deblur_kind"], P["deblur_k"], P.get("deblur_angle", 0.0))
     if name == "smooth":
@@ -409,15 +483,17 @@ def apply_stage(name, img, P):
         return adaptive_sharpening(img, P["sharpen"])
     if name == "hist":
         return histogram_stretch(img, P["hist"])
+    if name == "clahe":
+        return clahe_enhance(img, P.get("clahe", 0), P.get("clahe_tiles", 8))
     if name == "freq":
         return frequency_enhancement(img, P["freq"], P["cutoff"])
-    return tone_adjust(img, P["gamma"], P["sat"], P.get("balance", 0))
+    return tone_adjust(img, P["gamma"], P["sat"], P.get("balance", 0), restore=P.get("restore", 0))
 
 
 def stage_active(name, P):
     return {"dcp": P["use_dcp"], "deblur": P["deblur"] > 0, "smooth": P["smooth"] > 0,
-            "sharpen": P["sharpen"] > 0, "hist": P["hist"] > 0, "freq": P["freq"] > 0,
-            "tone": P["gamma"] != 1.0 or P["sat"] != 1.0 or bool(P.get("balance", 0))}[name]
+            "sharpen": P["sharpen"] > 0, "hist": P["hist"] > 0, "clahe": P.get("clahe", 0) > 0, "freq": P["freq"] > 0,
+            "tone": P["gamma"] != 1.0 or P["sat"] != 1.0 or bool(P.get("balance", 0)) or bool(P.get("restore", 0))}[name]
 
 
 def dehaze_pipeline(img, P):

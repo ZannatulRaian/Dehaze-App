@@ -34,7 +34,7 @@ from dehaze_video import process_video
 from dehaze_core import (  # the image-processing code lives in dehaze_core.py
     P_BALANCED, P_MODULES, P_TRAFFIC, STAGE_ORDER, apply_stage, auto_strength_params, dehaze_pipeline,
     downstream_metrics, edge_maps, estimate_blur as _estimate_blur, haze_level as _haze_level, strength_scale, make_sample_scene, psnr, quality_metrics, simulate_blur as _simulate_blur,
-    simulate_fog as _simulate_fog, ssim, stage_active,
+    simulate_fog as _simulate_fog, ssim, stage_active, transmission_map_image, visibility_metrics,
 )
 
 # Optional extra for iPhone HEIC/HEIF photos (it also gives an older Pillow
@@ -114,8 +114,9 @@ def list_test_images():
                 or "_depth" in pth.name or pth.parent.name == "urban_real_clear"):
             continue
         ref = pth.with_suffix("").with_name(pth.stem.replace("_hazy", "_clear_reference")).with_suffix(pth.suffix)
+        has_ref = ref != pth and ref.exists()       # a photo without "_hazy" in its name must not be its own reference
         label = pth.stem.replace("_hazy", "").replace("_", " ").capitalize()
-        found[label + (" (clear reference)" if ref.exists() else "")] = (pth, ref if ref.exists() else None)
+        found[label + (" (clear reference)" if has_ref else "")] = (pth, ref if has_ref else None)
     return found
 
 
@@ -142,6 +143,8 @@ def _ui(P):
     return dict(hist_strength=P["hist"], freq_strength=P["freq"], smooth_strength=P["smooth"],
                 sharpen_strength=P["sharpen"], dcp_omega=P["omega"], dcp_t0=P["t0"], dcp_patch=P["patch"],
                 freq_cutoff=P["cutoff"], tone_gamma=P["gamma"], tone_sat=P["sat"], tone_balance=P["balance"],
+                clahe_strength=P.get("clahe", 0), clahe_tiles=P.get("clahe_tiles", 8), tone_restore=P.get("restore", 0),
+                dcp_adaptive=P.get("adaptive", False),
                 deblur_amount=P["deblur"], deblur_kind=P["deblur_kind"], deblur_k=P["deblur_k"], deblur_auto=False,
                 deblur_angle=0.0, strength_auto=False, use_dcp=P["use_dcp"], modules_only=False)
 
@@ -155,7 +158,8 @@ PRESETS = {
                   "sharpen_strength": 45, "dcp_omega": 0.95, "dcp_t0": 0.12},
     "Maximum detail": {**_BASE, "hist_strength": 45, "freq_strength": 40, "smooth_strength": 35,
                        "sharpen_strength": 55, "dcp_omega": 0.95, "dcp_t0": 0.12},
-    "Fog removal only": {**_BASE, "hist_strength": 0, "freq_strength": 0, "smooth_strength": 0, "sharpen_strength": 0},
+    "Fog removal only": {**_BASE, "hist_strength": 0, "freq_strength": 0, "smooth_strength": 0, "sharpen_strength": 0,
+                         "clahe_strength": 0, "tone_restore": 0},
     # for vehicle and pedestrian detection: the frequency, sharpening and colour-balance stages lowered detection recall
     "Traffic monitoring": {**_ui(P_TRAFFIC), "strength_auto": True},
     "Course modules only": {**_ui(P_MODULES), "use_dcp": True, "modules_only": True},
@@ -560,6 +564,14 @@ def inject_css():
            Streamlit's own 5rem; max-width only matters on very wide windows,
            where it stops the cards stretching into long thin bars. */
         [data-testid="stMain"] { overflow-x: hidden; }
+        /* An image enlarged with its hover button is drawn as a fixed full-window layer INSIDE the left card, whose
+           sticky wrapper is a stacking context of its own. Without a z-index of its own that context was painted
+           under the later pipeline card, so the pipeline's heading, labels and sliders showed through the enlarged
+           picture. Raising the left wrapper (set where it is made sticky, below) puts the enlarged image on top of
+           everything; the columns and card also may not grow past their share of the row. */
+        [data-testid="stColumn"] { min-width: 0; }
+        .st-key-upload_card { max-width: 100%; }
+        .st-key-preview_images [data-testid="stImage"] img { max-width: 100%; }
         [data-testid="stMainBlockContainer"] {
             padding: 0 2rem 1.2rem 2rem;
             max-width: 112rem;
@@ -909,7 +921,7 @@ st.markdown(
     """
     <style>
     /* extra rows in the pipeline card + the measurements block, in the same style */
-    .st-key-stage_input, .st-key-stage_dcp, .st-key-stage_deblur, .st-key-stage_tone { gap: .15rem; margin-top: .9rem; }
+    .st-key-stage_input, .st-key-stage_dcp, .st-key-stage_deblur, .st-key-stage_tone, .st-key-stage_clahe { gap: .15rem; margin-top: .9rem; }
     .st-key-upload_card { --pv-maxh: max(12rem, calc(var(--ufc-card-h) - 12.5rem)); }
     .st-key-pipeline_card [data-testid="stSelectbox"] label p,
     .st-key-pipeline_card [data-testid="stToggle"] label p,
@@ -937,7 +949,7 @@ st.markdown(
     .st-key-method_card [data-testid="stMarkdownContainer"] p.ufc-eq { text-indent: 0; text-align: left; margin-bottom: 1rem; }
     .st-key-method_card [data-testid="stMarkdownContainer"] ol { margin: 0; padding-left: 1.9rem; }
     .st-key-method_card [data-testid="stMarkdownContainer"] ol li { margin: 0 0 .7rem; padding-left: .5rem;
-        line-height: 1.65; text-align: left; }
+        line-height: 1.65; text-align: justify; hyphens: auto; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -946,8 +958,8 @@ render_title()
 render_header()
 
 SAMPLE_LABEL, PLACEHOLDER = "Sample scene (synthetic city)", "Or try a sample…"
-VIEWS = ["Side by side", "Slider", "Original", "Dehazed", "Stages", "Edges"]
-STAGE_LABELS = ["01 Dark Channel", "02 Deblur", "05 Smoothing", "06 Sharpening", "03 Histogram", "04 Frequency", "07 Tone"]  # run order
+VIEWS = ["Side by side", "Slider", "Original", "Dehazed", "Stages", "Edges", "Transmission"]
+STAGE_LABELS = ["01 Dark Channel", "02 Deblur", "05 Smoothing", "06 Sharpening", "03 Histogram", "03b CLAHE", "04 Frequency", "07 Tone"]  # run order
 
 for _k, _v in {"source_key": None, "source_img": None, "source_depth": None, "reference": None,
                "pre_foggy": True, "fog_density": 1.6, "upload_round": 0, "upload_error": None,
@@ -976,6 +988,8 @@ def _apply_reset():
     st.session_state.tone_gamma = 1.0
     st.session_state.tone_sat = 1.0
     st.session_state.tone_balance = 0
+    st.session_state.tone_restore = 0
+    st.session_state.clahe_strength = 0
     st.session_state.deblur_amount = 0.0
     st.session_state.deblur_auto = False
     st.session_state.strength_auto = False
@@ -1017,7 +1031,9 @@ def current_params():
                 use_dcp=bool(ss.use_dcp and not only), deblur=0.0 if only else ss.deblur_amount,
                 deblur_kind=ss.deblur_kind, deblur_k=ss.deblur_k, deblur_angle=ss.deblur_angle,
                 gamma=1.0 if only else ss.tone_gamma, sat=1.0 if only else ss.tone_sat,
-                balance=0 if only else ss.tone_balance, cutoff=ss.freq_cutoff)
+                balance=0 if only else ss.tone_balance, cutoff=ss.freq_cutoff,
+                clahe=0 if only else ss.clahe_strength, clahe_tiles=ss.clahe_tiles,
+                restore=0 if only else ss.tone_restore, adaptive=bool(ss.dcp_adaptive and not only))
 
 
 def effective_params(img, P):
@@ -1101,7 +1117,7 @@ with left_col:
             )
             single_cap = (
                 '.st-key-preview_images { width: min(100%, calc(var(--pv-maxh) * var(--pv-ar, 1.25))) !important; }'
-                if view not in ("Side by side", "Stages", "Edges") else ""
+                if view not in ("Side by side", "Stages", "Edges", "Transmission") else ""
             )
             top_l, top_r = st.columns([3, 1])
             with top_l:
@@ -1109,7 +1125,7 @@ with left_col:
                     f'<style>.st-key-preview_images {{ --pv-ar: {src_w / src_h:.4f}; }}{sliver_cap}{single_cap}</style>'
                     '<style>.st-key-upload_card { min-height: 0 !important; }'
                     '[data-testid="stLayoutWrapper"]:has(> .st-key-upload_card) '
-                    '{ flex: 0 0 auto !important; align-self: flex-start; width: 100%; position: sticky; top: 1rem; }'
+                    '{ flex: 0 0 auto !important; align-self: flex-start; width: 100%; position: sticky; top: 4.5rem; z-index: 1000050; }'
                     '[data-testid="stLayoutWrapper"]:has(> .st-key-preview_images) '
                     '{ margin-top: 0 !important; margin-bottom: 0 !important; }</style>'
                     '<div class="card-heading">Preview</div>',
@@ -1171,6 +1187,14 @@ with left_col:
                         st.image(e0, caption="Original edges", width="stretch")
                     with col_a:
                         st.image(e1, caption="Dehazed edges (same scale)", width="stretch")
+                elif view == "Transmission":
+                    col_b, col_a = st.columns(2)
+                    with col_b:
+                        st.image(hazy, caption="Original", width="stretch")
+                    with col_a:
+                        st.image(transmission_map_image(hazy, P), width="stretch",
+                                 caption="Estimated transmission t (dark = thick haze, bright = clear)"
+                                 if P["use_dcp"] else "Dark channel is off, so this is the map it would estimate")
                 elif view == "Original":
                     st.image(hazy, caption="Original", width="stretch")
                 else:
@@ -1187,6 +1211,7 @@ with left_col:
                 if ref_key == st.session_state.source_key and ref_img.shape == hazy.shape:
                     ref = ref_img
             d0, d1 = downstream(hazy, ref), downstream(result, ref)
+            vis = visibility_metrics(hazy, result)
 
             def _row(name, a, b, d):
                 return f"<tr><td>{name}</td><td>{a:.{d}f}</td><td><b>{b:.{d}f}</b></td></tr>"
@@ -1195,6 +1220,9 @@ with left_col:
                     + _row("Entropy (bits)", m0["entropy"], m1["entropy"], 2)
                     + _row("Mean gradient", m0["gradient"], m1["gradient"], 2)
                     + _row("Edge pixels (%)", m0["edges"], m1["edges"], 1)
+                    + f'<tr><td>Visible-edge gain e</td><td>&ndash;</td><td><b>{vis["e"]:+.2f}</b></td></tr>'
+                    + f'<tr><td>Gradient ratio r̄</td><td>&ndash;</td><td><b>{vis["r"]:.2f}</b></td></tr>'
+                    + f'<tr><td>Newly clipped pixels (%)</td><td>&ndash;</td><td><b>{100 * vis["sigma"]:.2f}</b></td></tr>'
                     + _row("Canny edges (% px)", d0["canny_pct"], d1["canny_pct"], 1)
                     + _row("Lines found (Hough)", d0["lines"], d1["lines"], 0)
                     + _row("&nbsp;&nbsp;vertical (buildings)", d0["lines_vertical"], d1["lines_vertical"], 0)
@@ -1283,6 +1311,7 @@ with right_col:
             patch = st.session_state.dcp_patch
             st.markdown(_param_row("Patch size", "auto" if patch == 0 else f"{patch}px"), unsafe_allow_html=True)
             st.slider("Patch size", 0, 61, step=1, key="dcp_patch", label_visibility="collapsed")
+            st.toggle("Adaptive airlight and t₀ (measured from the photo's haze)", key="dcp_adaptive")
 
         # Stage 02 — Deblur
         with st.container(key="stage_deblur"):
@@ -1317,6 +1346,15 @@ with right_col:
             st.markdown(_stage_row("03", "Histogram Stretch", st.session_state.hist_strength), unsafe_allow_html=True)
             hist_strength = st.slider("Histogram strength", 0, 100, key="hist_strength", label_visibility="collapsed")
 
+        # Stage 03b — CLAHE (local contrast), on the luminance only
+        with st.container(key="stage_clahe"):
+            st.markdown(_stage_row("03b", "CLAHE (local contrast)", st.session_state.clahe_strength),
+                        unsafe_allow_html=True)
+            st.slider("CLAHE clip strength", 0, 100, key="clahe_strength", label_visibility="collapsed")
+            st.markdown(_param_row("Tile grid", f"{st.session_state.clahe_tiles}×{st.session_state.clahe_tiles}"),
+                        unsafe_allow_html=True)
+            st.slider("CLAHE tile grid", 2, 16, key="clahe_tiles", label_visibility="collapsed")
+
         # Stage 03 — Frequency-Domain Filter
         with st.container(key="stage_freq"):
             st.markdown(_stage_row("04", "Frequency-Domain Filter", st.session_state.freq_strength),
@@ -1347,6 +1385,8 @@ with right_col:
             st.slider("Saturation", 0.50, 2.00, step=0.05, key="tone_sat", label_visibility="collapsed")
             st.markdown(_param_row("Colour balance", f"{st.session_state.tone_balance}"), unsafe_allow_html=True)
             st.slider("Colour balance", 0, 100, key="tone_balance", label_visibility="collapsed")
+            st.markdown(_param_row("Colour restoration", f"{st.session_state.tone_restore}"), unsafe_allow_html=True)
+            st.slider("Colour restoration", 0, 100, key="tone_restore", label_visibility="collapsed")
 
         with st.container(key="pipeline_actions"):
             st.selectbox("Preset", list(PRESETS), key="preset_choice", on_change=_apply_preset)

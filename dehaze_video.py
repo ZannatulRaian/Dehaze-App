@@ -63,7 +63,7 @@ class TemporalDehazer:
         for name in C.STAGE_ORDER:
             if name == "dcp":
                 if P["use_dcp"]:
-                    t, A = C.estimate_transmission(img, P["omega"], P["t0"], P["patch"])
+                    t, A = C.estimate_transmission(img, P["omega"], P["t0"], P["patch"], P.get("adaptive", False))
                     if self.t is not None and self.t.shape == t.shape:
                         wt = np.where(still, w, 0.0).astype(np.float32)          # smooth only where nothing moved
                         t = wt * self.t + (1.0 - wt) * t
@@ -79,7 +79,8 @@ class TemporalDehazer:
                 if C.stage_active("tone", P):
                     if P.get("balance", 0):
                         self.gains = self._ema(self.gains, C.colour_balance_gains(img, P["balance"]), w)
-                    img = C.tone_adjust(img, P["gamma"], P["sat"], P.get("balance", 0), gains=self.gains)
+                    img = C.tone_adjust(img, P["gamma"], P["sat"], P.get("balance", 0), gains=self.gains,
+                                        restore=P.get("restore", 0))
             elif C.stage_active(name, P):
                 img = C.apply_stage(name, img, P)
         self.P = P

@@ -19,6 +19,22 @@
 
 ---
 
+## Project Brief
+
+**Project 7. Urban Fog Cleaner (Dehazing Tool)**
+
+**Idea:** Simulate foggy images (or use real ones) and use **image enhancement techniques** to make urban structures more visible (e.g., buildings, roads) from a blurred or foggy view.
+
+**Modules Used:**
+
+- Frequency Domain Enhancement (for edge sharpening)
+- Histogram Stretching
+- Adaptive Smoothing and Sharpening
+
+**Impact:** Useful for traffic monitoring systems or construction inspection under poor visibility.
+
+---
+
 ## Overview
 
 **Dehaze App** is a Streamlit web app that makes buildings, roads and vehicles more visible in foggy or blurred urban photos. It was built as a Digital Image Processing course project (*Project 7*).
@@ -289,3 +305,18 @@ Dehaze-App/
 ## Author
 
 **Zannatul Raian** · [@ZannatulRaian](https://github.com/ZannatulRaian)
+
+## Update — local contrast, adaptive fog removal, colour restoration
+
+- **CLAHE stage (03b)**: contrast-limited adaptive histogram equalisation on the CIELAB L channel only (colours are not shifted), with clip-strength and tile-grid sliders. Runs after the histogram stretch. Off in "Course modules only".
+- **Adaptive dark channel**: the airlight is the mean of the brightest fifth of the haze candidates (not one pixel, which can be a white car or a lamp), and the transmission floor t₀ is scaled to the measured haze. Toggle in stage 01.
+- **Noise-aware sharpening**: the unsharp-mask detail is weighted by a local-activity map and the Immerkaer noise estimate, so edges are sharpened and flat noisy areas are not.
+- **Colour restoration**: mid-tone white balance (removes the leftover blue/cyan cast) plus a saturation boost that is larger the more washed-out the image still is. Slider in stage 07.
+- **Transmission view**: the estimated transmission map t as a colour map next to the original.
+- **Measurements**: no-reference visibility rows (visible-edge gain e, gradient ratio r̄, newly clipped pixels) added to the table.
+- **Fix**: an image enlarged with its hover button is no longer drawn under the Enhancement Pipeline card.
+- **Real street photos**: `python get_street_photos.py` (already run; the 9 photos are in `assets/test images/urban_real_clear/`) and appear in the sample list with fog simulated on them.
+
+On the 13 test scenes that have a clear reference, the new defaults score about the same PSNR/SSIM as before (17.4 dB / 0.74 vs 17.5 dB / 0.75): CLAHE and colour restoration trade a little pixel fidelity for local contrast and natural colour, so judge them by eye and by the visibility rows, not by PSNR alone.
+
+**Bundled real photos** (for local testing; they keep their original licences): `assets/test images/urban_real_foggy/` has 7 real hazy/foggy scenes (street, town, skyline) that open as "already foggy"; `urban_real_clear/` has 10 clear street photos (with pedestrians, cars, a bus) that get simulated fog. Sources: github.com/matterport/Mask_RCNN, ultralytics/assets, and the sample images of Utkarsh-Deshmukh/Single-Image-Dehazing-Python and He-Zhang/image_dehaze.
