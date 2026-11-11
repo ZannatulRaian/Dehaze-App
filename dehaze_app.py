@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 import streamlit as st
 from PIL import Image,ImageOps,UnidentifiedImageError
-from dehaze_video import process_video
+from dehaze_video import detection_video,process_video
 from dehaze_core import ( # the image-processing code lives in dehaze_core.py
     P_BALANCED,P_MODULES,P_TRAFFIC,STAGE_ORDER,apply_stage,baseline_methods,draw_boxes,hist_clip_percent,histogram_stretch,edge_overlay,freq_response_curve,heat_image,radial_spectrum,sharpen_weight_map,smoothing_change_map,spectrum_image,auto_strength_params,dehaze_pipeline,
     downstream_metrics,edge_maps,estimate_blur as _estimate_blur,haze_level as _haze_level,strength_scale,make_sample_scene,psnr,quality_metrics,simulate_blur as _simulate_blur,
@@ -154,8 +154,71 @@ def run_pipeline(img,P):
     t=time.perf_counter()
     out=dehaze_pipeline(img,P)
     return out,time.perf_counter()-t
+# Applications panel: traffic detection (YOLOv5n) and construction-inspection edge and line overlays, original against dehazed; returns the detector settings
+def render_applications(a,b,key):
+    t_traffic,t_build=st.tabs(["Traffic monitoring","Construction inspection"])
+    with t_traffic:
+        sens=st.slider("Detection confidence",0.10,0.60,0.20,0.05,key=f"det_conf_{key}",
+            help="Lower finds more (and fainter) vehicles, but also more false ones")
+        tiled=st.toggle("Search tiles for small and distant vehicles",value=True,key=f"det_tiled_{key}")
+        st.caption("Also runs the detector on overlapping zoomed-in tiles, which finds motorcycles and cars far away in the fog.")
+        try:
+            d_in,d_out=detect_vehicles(a,sens,tiled),detect_vehicles(b,sens,tiled)
+            col_b,col_a=st.columns(2)
+            col_b.image(draw_boxes(a,d_in),width="stretch",caption=f"Original: {len(d_in)} vehicles and people detected")
+            col_a.image(draw_boxes(b,d_out),width="stretch",caption=f"Dehazed: {len(d_out)} vehicles and people detected")
+        except Exception as exc:
+            st.caption(f"Detection model not available here ({type(exc).__name__}); see detect.py to download yolov5n.onnx.")
+    with t_build:
+        e_in,e_out=downstream(a),downstream(b)
+        col_b,col_a=st.columns(2)
+        col_b.image(edge_overlay(a),width="stretch",
+            caption=f"Original: edges {e_in['canny_pct']:.1f}% of pixels, {e_in['lines']} lines ({e_in['lines_vertical']} vertical)")
+        col_a.image(edge_overlay(b),width="stretch",
+            caption=f"Dehazed: edges {e_out['canny_pct']:.1f}% of pixels, {e_out['lines']} lines ({e_out['lines_vertical']} vertical)")
+    return sens,tiled
+# Graphs for an original and a dehazed image: brightness and colour histograms, gamma curves, FFT spectra and the mean spectrum by frequency
+def render_graphs(a,b):
+    m0,m1=quality_metrics(a),quality_metrics(b)
+    c1,c2=st.columns(2)
+    c1.markdown('<p class="ufc-cap">Brightness histogram: original (grey), dehazed (red)</p>'
+        +hist_svg([(m0["hist"],"#9a9a9a",False),(m1["hist"],"#d32f2f",False)],label="Brightness histograms"),unsafe_allow_html=True)
+    chan=["#e53935","#43a047","#1e88e5"]
+    c2.markdown('<p class="ufc-cap">R, G, B histograms: original (dashed), dehazed (solid)</p>'
+        +hist_svg([(m0["chans"][c],chan[c],True) for c in range(3)]+[(m1["chans"][c],chan[c],False) for c in range(3)],
+            label="Colour channel histograms"),unsafe_allow_html=True)
+    g0,g1=effective_gamma(a),effective_gamma(b)
+    gx=np.arange(0,256,4.0)
+    c1.markdown(f'<p class="ufc-cap">Gamma: normal 1.00 (dashed), original {g0:.2f} (grey), dehazed {g1:.2f} (red)</p>'
+        +curve_svg([(gx,gx,"#555555",True,1.5),(gx,255*(gx/255)**(1/g0),"#9a9a9a",False,3),(gx,255*(gx/255)**(1/g1),"#d32f2f",False,3)],
+            label="Gamma curves"),unsafe_allow_html=True)
+    rx,r0=radial_spectrum(a)
+    _,r1=radial_spectrum(b)
+    c2.markdown('<p class="ufc-cap">Mean spectrum by frequency: original (grey), dehazed (red)</p>'
+        +line_svg([(rx,r0,"#9a9a9a",False),(rx,r1,"#d32f2f",False)],label="Radial spectrum",xlabel="frequency (1 = Nyquist)",ylabel="log |F|"),
+        unsafe_allow_html=True)
+    s0,vmax=spectrum_image(a)
+    s1,_=spectrum_image(b,vmax)
+    c1.image(s0,caption="FFT spectrum of the original (log magnitude)",width="stretch")
+    c2.image(s1,caption="FFT spectrum of the dehazed image (same scale)",width="stretch")
+# Vertical bar chart as inline SVG, one bar per label with its value on top; a dashed line marks 1.0 when the values are ratios
+def bars_svg(labels,values,colour="#d32f2f",fmt="{:.2f}",ref=None,w=900,h=170,label="Bars"):
+    n=len(values)
+    vmax=max(max(values),ref or 0.0,1e-6)*1.15
+    bw=(w-20)/n
+    out=""
+    for i,(lab,v) in enumerate(zip(labels,values)):
+        bh=v/vmax*(h-44)
+        x=10+i*bw
+        out+=(f'<rect x="{x+bw*0.15:.1f}" y="{h-24-bh:.1f}" width="{bw*0.7:.1f}" height="{bh:.1f}" fill="{colour}"/>'
+            f'<text x="{x+bw/2:.1f}" y="{h-28-bh:.1f}" font-size="11" text-anchor="middle" fill="#333">{fmt.format(v)}</text>'
+            f'<text x="{x+bw/2:.1f}" y="{h-8}" font-size="10" text-anchor="middle" fill="#888">{lab[:10]}</text>')
+    if ref:
+        out+=f'<line x1="10" y1="{h-24-ref/vmax*(h-44):.1f}" x2="{w-10}" y2="{h-24-ref/vmax*(h-44):.1f}" stroke="#555" stroke-dasharray="5 4"/>'
+    return (f'<svg viewBox="0 0 {w} {h}" width="100%" role="img" aria-label="{label}" '
+        f'style="background:#fafafa;border:1px solid rgba(0,0,0,.08);border-radius:.35rem">{out}</svg>')
 # YOLOv5n detections (cached), optionally also on overlapping tiles for small objects
-@st.cache_data(show_spinner="Detecting vehicles…",max_entries=6)
+@st.cache_data(show_spinner="Detecting vehicles…",max_entries=64)
 def detect_vehicles(img,conf,tiled):
     import detect as D
     return (D.detect_tiled if tiled else D.detect)(img,conf)
@@ -176,6 +239,26 @@ def resize_max(img,max_dim=MAX_DIM):
         new_size=(max(1,round(w*scale)),max(1,round(h*scale)))
         img=cv2.resize(img,new_size,interpolation=cv2.INTER_AREA)
     return img
+# Reads the original and dehazed clips side by side: per-frame metrics for the graphs and up to k evenly spaced frame pairs (as PNG bytes)
+def extract_video_data(orig_path,dehazed_path,n,k=12):
+    cap_o,cap_d=cv2.VideoCapture(str(orig_path)),cv2.VideoCapture(str(dehazed_path))
+    keep=set(np.linspace(0,max(n-1,0),min(k,n)).astype(int).tolist())
+    metrics,frames=[],[]
+    try:
+        for i in range(n):
+            ok1,o=cap_o.read()
+            ok2,d=cap_d.read()
+            if not (ok1 and ok2):
+                break
+            o,d=cv2.cvtColor(o,cv2.COLOR_BGR2RGB),cv2.cvtColor(d,cv2.COLOR_BGR2RGB)
+            q0,q1=quality_metrics(o),quality_metrics(d)
+            metrics.append((q0["contrast"],q1["contrast"],q0["edges"],q1["edges"],float(o.mean()),float(d.mean())))
+            if i in keep:
+                frames.append((to_png_bytes(o),to_png_bytes(d)))
+    finally:
+        cap_o.release()
+        cap_d.release()
+    return np.array(metrics),frames
 # Decodes PNG bytes back to an RGB array
 def png_to_rgb(data):
     return np.array(Image.open(io.BytesIO(data)).convert("RGB"))
@@ -714,27 +797,7 @@ with left_col:
                             cap+=f" · PSNR {psnr(im,ref_for_compare):.1f} dB · SSIM {ssim(im,ref_for_compare):.3f}"
                         cols[i%3].image(im,caption=cap,width="stretch")
                 elif view=="Applications":
-                    # Traffic monitoring (YOLOv5n vehicle detection) and construction inspection (Canny + Hough overlays) before and after
-                    t_traffic,t_build=st.tabs(["Traffic monitoring","Construction inspection"])
-                    with t_traffic:
-                        sens=st.slider("Detection confidence",0.10,0.60,0.20,0.05,key="det_conf",
-                            help="Lower finds more (and fainter) vehicles, but also more false ones")
-                        tiled=st.toggle("Search tiles for small and distant vehicles",value=True,key="det_tiled",
-                            help="Also runs the detector on overlapping zoomed-in tiles, which finds motorcycles and cars far away in the fog")
-                        try:
-                            d_in,d_out=detect_vehicles(hazy,sens,tiled),detect_vehicles(result,sens,tiled)
-                            col_b,col_a=st.columns(2)
-                            col_b.image(draw_boxes(hazy,d_in),width="stretch",caption=f"Original: {len(d_in)} vehicles and people detected")
-                            col_a.image(draw_boxes(result,d_out),width="stretch",caption=f"Dehazed: {len(d_out)} vehicles and people detected")
-                        except Exception as exc:
-                            st.caption(f"Detection model not available here ({type(exc).__name__}); see detect.py to download yolov5n.onnx.")
-                    with t_build:
-                        e_in,e_out=downstream(hazy),downstream(result)
-                        col_b,col_a=st.columns(2)
-                        col_b.image(edge_overlay(hazy),width="stretch",
-                            caption=f"Original: edges {e_in['canny_pct']:.1f}% of pixels, {e_in['lines']} lines ({e_in['lines_vertical']} vertical)")
-                        col_a.image(edge_overlay(result),width="stretch",
-                            caption=f"Dehazed: edges {e_out['canny_pct']:.1f}% of pixels, {e_out['lines']} lines ({e_out['lines_vertical']} vertical)")
+                    render_applications(hazy,result,"prev")
                 elif view=="Original":
                     st.image(hazy,caption="Original",width="stretch")
                 else:
@@ -988,7 +1051,7 @@ with lower_col:
             if "error" in r:
                 st.error(r["error"])
         if done:
-            st.segmented_control("Batch view",["Table","All images","Side by side","Slider"],default="Table",
+            st.segmented_control("Batch view",["Table","All images","Side by side","Slider","Applications","Graphs"],default="Table",
                 key="batch_view",label_visibility="collapsed")
             bview=st.session_state.get("batch_view") or "Table"
             if bview=="Table":
@@ -1004,13 +1067,30 @@ with lower_col:
                     ca.image(r["orig"],caption=f"{r['name']} (original)",width="stretch")
                     cb.image(r["png"],caption=f"{r['name']} (dehazed)",width="stretch")
             else:
-                # One photo at a time: pick it, then compare side by side or with a divider
+                # One photo at a time: pick it, then compare, run the application tests or look at its graphs
                 pick=st.selectbox("Photo",[r["name"] for r in done],key="batch_pick")
                 r=next(x for x in done if x["name"]==pick)
                 if bview=="Slider":
                     pos=st.slider("Compare position",0,100,50,key="batch_pos",label_visibility="collapsed")
                     st.image(compare_composite(png_to_rgb(r["orig"]),png_to_rgb(r["png"]),pos),
                         caption=f"Original (left) · Dehazed (right) · divider at {pos}%",width="stretch")
+                elif bview=="Applications":
+                    sens,tiled=render_applications(png_to_rgb(r["orig"]),png_to_rgb(r["png"]),"batch")
+                    if st.checkbox("Count vehicles and people in every photo",key="batch_count"):
+                        try:
+                            rows="".join(f"<tr><td>{x['name']}</td><td>{len(detect_vehicles(png_to_rgb(x['orig']),sens,tiled))}</td>"
+                                f"<td><b>{len(detect_vehicles(png_to_rgb(x['png']),sens,tiled))}</b></td></tr>" for x in done)
+                            st.markdown(f'<table class="ufc-m"><tr><th>Photo</th><th>Original</th><th>Dehazed</th></tr>{rows}</table>',unsafe_allow_html=True)
+                        except Exception as exc:
+                            st.caption(f"Detection model not available here ({type(exc).__name__}).")
+                elif bview=="Graphs":
+                    names=[x["name"] for x in done]
+                    # Gain of contrast and of edge pixels for every photo in the batch (1.0 = unchanged)
+                    st.markdown('<p class="ufc-cap">Contrast gain per photo (&times;, dashed line = 1)</p>'
+                        +bars_svg(names,[x["contrast"] for x in done],ref=1.0,label="Contrast gain per photo"),unsafe_allow_html=True)
+                    st.markdown('<p class="ufc-cap">Edge-pixel gain per photo (&times;, dashed line = 1)</p>'
+                        +bars_svg(names,[x["edges"] for x in done],"#1e88e5",ref=1.0,label="Edge gain per photo"),unsafe_allow_html=True)
+                    render_graphs(png_to_rgb(r["orig"]),png_to_rgb(r["png"]))
                 else:
                     ca,cb=st.columns(2)
                     ca.image(r["orig"],caption="Original",width="stretch")
@@ -1034,7 +1114,7 @@ with lower_col:
         v_frames=v1.slider("Frames to process",10,300,90,key="video_frames")
         v_smooth=v2.toggle("Smooth over time",value=True,key="video_temporal")
         if vid is not None and st.button("Process video",type="primary",key="video_go"):
-            with tempfile.TemporaryDirectory() as td:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td: # on Windows a still-open file must not stop the cleanup
                 src,dst=Path(td)/("in"+Path(vid.name).suffix),Path(td)/"out.mp4"
                 orig_dst,side_dst=Path(td)/"orig.mp4",Path(td)/"side.mp4"
                 src.write_bytes(vid.getvalue())
@@ -1046,6 +1126,7 @@ with lower_col:
                         max_dim=640,max_frames=v_frames,orig_dst=orig_dst,side_dst=side_dst,auto_blur=st.session_state.deblur_auto and not st.session_state.modules_only,
                         progress=lambda i,total:bar.progress(min(1.0,i/max(total,1))))
                     st.session_state.video_result=(dst.read_bytes(),n_fr,spf,orig_dst.read_bytes(),side_dst.read_bytes()) if n_fr else None
+                    st.session_state.video_extra=extract_video_data(orig_dst,dst,n_fr) if n_fr else None
                     st.session_state.video_error=None if n_fr else "No frames could be read from that file."
                 except Exception as exc:
                     st.session_state.video_result,st.session_state.video_error=None,f"Could not process that video: {exc}"
@@ -1054,13 +1135,81 @@ with lower_col:
             st.error(st.session_state.video_error)
         if st.session_state.get("video_result"):
             vdata,n_fr,spf,odata,sdata=st.session_state.video_result
-            st.segmented_control("Video view",["Side by side","Dehazed","Original"],default="Side by side",
+            st.segmented_control("Video view",["Side by side","Dehazed","Original","Applications","Live detection","Graphs"],default="Side by side",
                 key="video_view",label_visibility="collapsed")
             vview=st.session_state.get("video_view") or "Side by side"
-            # One clip with the original on the left and the dehazed frames on the right, so both play in sync
-            st.video({"Side by side":sdata,"Dehazed":vdata,"Original":odata}[vview])
-            if vview=="Side by side":
-                st.caption("Original (left) · Dehazed (right)")
+            vmetrics,vframes=st.session_state.get("video_extra") or (np.zeros((0,6)),[])
+            if vview in ("Side by side","Dehazed","Original"):
+                # One clip with the original on the left and the dehazed frames on the right, so both play in sync
+                st.video({"Side by side":sdata,"Dehazed":vdata,"Original":odata}[vview])
+                if vview=="Side by side":
+                    st.caption("Original (left) · Dehazed (right)")
+            elif vview=="Live detection":
+                # Detection on every frame of the whole clip: live preview while it runs, then a playable video with boxes and counts
+                st.caption("Runs the vehicle detector on every frame of the original and the dehazed clip and plays the result as a video, "
+                    "original on the left and dehazed on the right.")
+                d1,d2,d3=st.columns(3)
+                v_conf=d1.slider("Detection confidence",0.10,0.60,0.20,0.05,key="vdet_conf")
+                v_tiled=d2.toggle("Search tiles (small, distant)",value=True,key="vdet_tiled")
+                v_stride=d3.selectbox("Detect every … frames",[1,2,3,5],key="vdet_stride",
+                    help="Between detections the last boxes are reused: faster, but boxes lag fast traffic")
+                if st.button("Run detection on the video",type="primary",key="vdet_go"):
+                    live,bar=st.empty(),st.progress(0.0)
+                    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+                        po,pd_,pr=Path(td)/"o.mp4",Path(td)/"d.mp4",Path(td)/"det.mp4"
+                        po.write_bytes(odata)
+                        pd_.write_bytes(vdata)
+                        try:
+                            counts=detection_video(po,pd_,pr,v_conf,v_tiled,v_stride,
+                                progress=lambda i:bar.progress(min(1.0,i/max(n_fr,1))),
+                                preview=lambda im,i:live.image(im,caption=f"Frame {i} of {n_fr}",width="stretch"))
+                            st.session_state.video_det=(pr.read_bytes(),counts) if counts else None
+                            st.session_state.video_det_error=None
+                        except Exception as exc:
+                            st.session_state.video_det,st.session_state.video_det_error=None,f"Detection is not available here ({type(exc).__name__}: {exc})."
+                    bar.empty()
+                    live.empty()
+                if st.session_state.get("video_det_error"):
+                    st.error(st.session_state.video_det_error)
+                if st.session_state.get("video_det"):
+                    ddata,dcounts=st.session_state.video_det
+                    st.video(ddata)
+                    dc=np.array(dcounts,dtype=float)
+                    st.caption(f"Vehicles and people per frame, on average: original {dc[:,0].mean():.1f}, dehazed {dc[:,1].mean():.1f}.")
+                    xs=np.linspace(0,1,len(dc))
+                    st.markdown('<p class="ufc-cap">Vehicles and people found per frame: original (grey), dehazed (red)</p>'
+                        +line_svg([(xs,dc[:,0],"#9a9a9a",False),(xs,dc[:,1],"#d32f2f",False)],label="Detections per frame",xlabel="frame (first to last)",ylabel="count"),
+                        unsafe_allow_html=True)
+                    st.download_button("Download detection video",data=ddata,file_name="detection_video.mp4",mime="video/mp4",key="vdet_dl")
+            elif not vframes:
+                st.caption("No frames could be read back from the processed clip.")
+            else:
+                fi=st.select_slider("Frame",options=list(range(1,len(vframes)+1)),key="video_frame_pick",
+                    help="Evenly spaced frames from the processed part of the clip") if len(vframes)>1 else 1
+                fa,fb=png_to_rgb(vframes[fi-1][0]),png_to_rgb(vframes[fi-1][1])
+                if vview=="Applications":
+                    sens,tiled=render_applications(fa,fb,"video")
+                    if st.checkbox("Count vehicles and people in every sample frame",key="video_count"):
+                        try:
+                            n0=[len(detect_vehicles(png_to_rgb(o),sens,tiled)) for o,_ in vframes]
+                            n1=[len(detect_vehicles(png_to_rgb(d),sens,tiled)) for _,d in vframes]
+                            xs=np.linspace(0,1,len(n0))
+                            st.markdown('<p class="ufc-cap">Vehicles and people found per sample frame: original (grey), dehazed (red)</p>'
+                                +line_svg([(xs,n0,"#9a9a9a",False),(xs,n1,"#d32f2f",False)],label="Detections per frame",xlabel="sample frame (first to last)",ylabel="count"),
+                                unsafe_allow_html=True)
+                        except Exception as exc:
+                            st.caption(f"Detection model not available here ({type(exc).__name__}).")
+                else:
+                    # Metrics over the whole processed clip, then the histogram, gamma and spectrum graphs of the picked frame
+                    xs=np.linspace(0,1,len(vmetrics))
+                    g1,g2=st.columns(2)
+                    g1.markdown('<p class="ufc-cap">Contrast (std. dev.) per frame: original (grey), dehazed (red)</p>'
+                        +line_svg([(xs,vmetrics[:,0],"#9a9a9a",False),(xs,vmetrics[:,1],"#d32f2f",False)],label="Contrast per frame",xlabel="frame (first to last)",ylabel="contrast"),unsafe_allow_html=True)
+                    g2.markdown('<p class="ufc-cap">Edge pixels (%) per frame: original (grey), dehazed (red)</p>'
+                        +line_svg([(xs,vmetrics[:,2],"#9a9a9a",False),(xs,vmetrics[:,3],"#d32f2f",False)],label="Edge pixels per frame",xlabel="frame (first to last)",ylabel="edge %"),unsafe_allow_html=True)
+                    g1.markdown('<p class="ufc-cap">Mean brightness per frame: original (grey), dehazed (red)</p>'
+                        +line_svg([(xs,vmetrics[:,4],"#9a9a9a",False),(xs,vmetrics[:,5],"#d32f2f",False)],label="Brightness per frame",xlabel="frame (first to last)",ylabel="mean 0-255"),unsafe_allow_html=True)
+                    render_graphs(fa,fb)
             st.caption(f"{n_fr} frames, {spf:.2f} s per frame.")
             st.download_button("Download video",data=vdata,file_name="dehazed_video.mp4",mime="video/mp4")
     with st.container(border=True,key="method_card"):

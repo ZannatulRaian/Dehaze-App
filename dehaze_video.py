@@ -102,40 +102,83 @@ def process_video(src,dst,P=None,auto=False,temporal=True,max_dim=0,max_frames=0
     dehazer=TemporalDehazer(P,auto=auto,smoothing=0.9 if temporal else 0.0)
     writer,n,t0=None,0,time.perf_counter()
     extra={} # optional second and third writers: key -> (writer, path)
-    while True:
-        ok,bgr=cap.read()
-        if not ok or (max_frames and n>=max_frames):
-            break
-        s=min(1.0,max_dim/max(bgr.shape[:2])) if max_dim else 1.0
-        if s<1.0:
-            bgr=cv2.resize(bgr,None,fx=s,fy=s,interpolation=cv2.INTER_AREA)
-        rgb=cv2.cvtColor(bgr,cv2.COLOR_BGR2RGB)
-        if auto_blur and n==0:
-            dehazer.base=C.auto_deblur_params(rgb,dehazer.base)[0]
-        out=dehazer.process(rgb)
-        if writer is None:
-            fourcc=cv2.VideoWriter_fourcc(*"mp4v")
-            writer=cv2.VideoWriter(str(dst),fourcc,fps,(out.shape[1],out.shape[0]))
-            if orig_dst:
-                extra["orig"]=(cv2.VideoWriter(str(orig_dst),fourcc,fps,(out.shape[1],out.shape[0])),orig_dst)
-            if side_dst:
-                extra["side"]=(cv2.VideoWriter(str(side_dst),fourcc,fps,(2*out.shape[1],out.shape[0])),side_dst)
-        writer.write(cv2.cvtColor(out,cv2.COLOR_RGB2BGR))
-        if "orig" in extra:
-            extra["orig"][0].write(bgr)
-        if "side" in extra:
-            extra["side"][0].write(np.hstack([bgr,cv2.cvtColor(out,cv2.COLOR_RGB2BGR)]))
-        n+=1
-        if progress:
-            progress(n,min(n_total,max_frames) if max_frames and n_total else (max_frames or n_total))
-    cap.release()
-    if writer is not None:
-        writer.release()
-        to_h264(dst)
-        for w,path in extra.values():
+    try: # the finally below frees every file even if the app stops the run, which Windows needs to delete the temp folder
+        while True:
+            ok,bgr=cap.read()
+            if not ok or (max_frames and n>=max_frames):
+                break
+            s=min(1.0,max_dim/max(bgr.shape[:2])) if max_dim else 1.0
+            if s<1.0:
+                bgr=cv2.resize(bgr,None,fx=s,fy=s,interpolation=cv2.INTER_AREA)
+            rgb=cv2.cvtColor(bgr,cv2.COLOR_BGR2RGB)
+            if auto_blur and n==0:
+                dehazer.base=C.auto_deblur_params(rgb,dehazer.base)[0]
+            out=dehazer.process(rgb)
+            if writer is None:
+                fourcc=cv2.VideoWriter_fourcc(*"mp4v")
+                writer=cv2.VideoWriter(str(dst),fourcc,fps,(out.shape[1],out.shape[0]))
+                if orig_dst:
+                    extra["orig"]=(cv2.VideoWriter(str(orig_dst),fourcc,fps,(out.shape[1],out.shape[0])),orig_dst)
+                if side_dst:
+                    extra["side"]=(cv2.VideoWriter(str(side_dst),fourcc,fps,(2*out.shape[1],out.shape[0])),side_dst)
+            writer.write(cv2.cvtColor(out,cv2.COLOR_RGB2BGR))
+            if "orig" in extra:
+                extra["orig"][0].write(bgr)
+            if "side" in extra:
+                extra["side"][0].write(np.hstack([bgr,cv2.cvtColor(out,cv2.COLOR_RGB2BGR)]))
+            n+=1
+            if progress:
+                progress(n,min(n_total,max_frames) if max_frames and n_total else (max_frames or n_total))
+    finally:
+        cap.release()
+        if writer is not None:
+            writer.release()
+        for w,_ in extra.values():
             w.release()
+    if writer is not None:
+        to_h264(dst)
+        for _,path in extra.values():
             to_h264(path)
     return n,(time.perf_counter()-t0)/max(n,1)
+# Vehicle detection on every stride-th frame of the original and dehazed clips: boxes and counts drawn, written as an original | dehazed mp4; returns the (original, dehazed) count per frame
+def detection_video(orig_path,dehazed_path,dst,conf=0.2,tiled=True,stride=1,progress=None,preview=None):
+    import detect as D
+    run=D.detect_tiled if tiled else D.detect
+    cap_o,cap_d=cv2.VideoCapture(str(orig_path)),cv2.VideoCapture(str(dehazed_path))
+    fps=cap_o.get(cv2.CAP_PROP_FPS) or 25.0
+    writer,counts,boxes,i=None,[],([],[]),0
+    try:
+        while True:
+            ok1,o=cap_o.read()
+            ok2,d=cap_d.read()
+            if not (ok1 and ok2):
+                break
+            o,d=cv2.cvtColor(o,cv2.COLOR_BGR2RGB),cv2.cvtColor(d,cv2.COLOR_BGR2RGB)
+            if i%max(1,stride)==0: # between detections the last boxes are reused
+                boxes=(run(o,conf),run(d,conf))
+            frames=[C.draw_boxes(im,b) for im,b in zip((o,d),boxes)]
+            for im,label,b in zip(frames,("Original","Dehazed"),boxes):
+                # Count banner in the top-left corner
+                cv2.rectangle(im,(0,0),(200,28),(0,0,0),-1)
+                cv2.putText(im,f"{label}: {len(b)} found",(6,20),cv2.FONT_HERSHEY_SIMPLEX,0.6,(255,255,255),1,cv2.LINE_AA)
+            both=np.hstack(frames)
+            if writer is None:
+                writer=cv2.VideoWriter(str(dst),cv2.VideoWriter_fourcc(*"mp4v"),fps,(both.shape[1],both.shape[0]))
+            writer.write(cv2.cvtColor(both,cv2.COLOR_RGB2BGR))
+            counts.append((len(boxes[0]),len(boxes[1])))
+            i+=1
+            if preview:
+                preview(both,i)
+            if progress:
+                progress(i)
+    finally:
+        cap_o.release()
+        cap_d.release()
+        if writer is not None:
+            writer.release()
+    if writer is not None:
+        to_h264(dst)
+    return counts
 # Command-line entry point
 def main():
     ap=argparse.ArgumentParser(description="Dehazing for video (traffic cameras, construction-site cameras).")
