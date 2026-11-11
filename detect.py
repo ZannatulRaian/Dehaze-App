@@ -56,6 +56,26 @@ def detect(img,conf=0.25,iou=0.45,classes=None):
     # Non-maximum suppression: drop boxes that overlap a better box by more than the IoU threshold
     idx=cv2.dnn.NMSBoxes(wh,sc.tolist(),conf,iou)
     return [(*np.clip(xyxy[i],0,[w,h,w,h]).tolist(),float(sc[i]),keep[int(cl[i])]) for i in np.array(idx).ravel()]
+# Tiled detection: the full frame plus overlapping tiles of about 560 px, so small far-away vehicles and motorcycles are seen at a higher resolution; merged with NMS
+def detect_tiled(img,conf=0.25,iou=0.45,classes=None,tile=560,overlap=0.3):
+    h,w=img.shape[:2]
+    nx,ny=-(-w//tile),-(-h//tile)
+    found=detect(img,conf,iou,classes)
+    if nx*ny>1:
+        tw,th=min(w,int(w/nx*(1+overlap))),min(h,int(h/ny*(1+overlap)))
+        for y0 in np.linspace(0,h-th,ny).astype(int):
+            for x0 in np.linspace(0,w-tw,nx).astype(int):
+                for b in detect(img[y0:y0+th,x0:x0+tw],conf,iou,classes):
+                    # A box that ends on a tile edge inside the image is cut off, so skip it
+                    if (b[0]<2 and x0>0) or (b[1]<2 and y0>0) or (b[2]>tw-2 and x0+tw<w) or (b[3]>th-2 and y0+th<h):
+                        continue
+                    found.append((b[0]+x0,b[1]+y0,b[2]+x0,b[3]+y0,b[4],b[5]))
+    if len(found)<2:
+        return found
+    wh=[[b[0],b[1],b[2]-b[0],b[3]-b[1]] for b in found]
+    # Non-maximum suppression over the union of all passes
+    keep=np.array(cv2.dnn.NMSBoxes(wh,[b[4] for b in found],conf,iou)).ravel()
+    return [found[i] for i in keep]
 # Intersection over union of two boxes
 def _iou(a,b):
     ix=max(0.0,min(a[2],b[2])-max(a[0],b[0]))

@@ -1,4 +1,4 @@
-# Evaluation of the Dehaze App against clear references (PSNR, SSIM, Canny, Hough, YOLOv5n); usage: python evaluate.py [--export-urban] [--fit-strength]
+# Evaluation of the Dehaze App against clear references (PSNR, SSIM, Canny, Hough, YOLOv5n); usage: python evaluate.py [--export-urban] [--fit-strength] [--charts]
 import argparse
 import csv
 import time
@@ -17,7 +17,7 @@ URBAN_SYN=TEST/"urban_synthetic"
 OUT=ROOT/"results"
 URBAN_BETA=1.6 # fog density of the hazy images stored in urban_synthetic
 BETA=1.6 # fog density used for the simulated conditions
-OFF=dict(C.P_BALANCED,use_dcp=False,hist=0,freq=0,smooth=0,sharpen=0,balance=0)
+OFF=dict(C.P_BALANCED,use_dcp=False,hist=0,freq=0,smooth=0,sharpen=0,balance=0,clahe=0,restore=0,gamma=1.0,far=0)
 auto_strength= lambda img:C.auto_strength_params(img)[0]
 all_auto= lambda img:C.auto_deblur_params(img,C.auto_strength_params(img)[0])[0]
 METHODS={ # name -> settings (strengths of the single modules are set to a medium 50), or a function image -> settings
@@ -361,16 +361,131 @@ def video_table(n=30,noise=2.0,seed=0):
         ["foggy frame","frame on its own","temporal","clear frame"],OUT/"figures"/"video_frame.png")
     return "\n".join(lines)
 # Runs the nine experiments and writes the CSV files, figures and summary.md
+# Escapes text for SVG
+def _esc(t):
+    return str(t).replace("&","&amp;").replace("<","&lt;")
+SERIES_COLOURS=["#9a9a9a","#1e88e5","#d32f2f","#43a047","#f9a825"]
+# Horizontal grouped bar chart as SVG text: one group per label, one bar per series (name, values), with the value printed on each bar
+def bar_svg(title,labels,series,colours=SERIES_COLOURS,fmt="{:.3f}",vmin=0.0):
+    lw,w,bh=300,820,15
+    gh=len(series)*(bh+2)+12
+    h=46+len(labels)*gh+22*len(series)
+    vmax=max(max(v) for _,v in series)
+    out=[f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" font-family="sans-serif" font-size="12">',
+        f'<rect width="{w}" height="{h}" fill="#ffffff"/><text x="10" y="22" font-size="15" font-weight="bold" fill="#222">{_esc(title)}</text>']
+    for j,(name,_) in enumerate(series): # legend
+        out.append(f'<rect x="{10+j*190}" y="30" width="12" height="12" fill="{colours[j%len(colours)]}"/><text x="27" y="41" fill="#333" transform="translate({j*190},0)">{_esc(name)}</text>')
+    for i,lab in enumerate(labels):
+        y0=52+i*gh
+        out.append(f'<text x="{lw-8}" y="{y0+gh/2:.0f}" text-anchor="end" fill="#333">{_esc(lab)}</text>')
+        for j,(_,vals) in enumerate(series):
+            v=vals[i]
+            bw=max(1.0,(v-vmin)/max(vmax-vmin,1e-9)*(w-lw-80))
+            y=y0+j*(bh+2)
+            out.append(f'<rect x="{lw}" y="{y}" width="{bw:.1f}" height="{bh}" fill="{colours[j%len(colours)]}"/>'
+                f'<text x="{lw+bw+5:.1f}" y="{y+bh-3}" fill="#333">{fmt.format(v)}</text>')
+    return "".join(out)+"</svg>"
+# Line chart as SVG text: series are (name, ys) over shared xs, with markers
+def line_chart_svg(title,xs,series,xlabel,ylabel,colours=SERIES_COLOURS,fmt="{:.2f}"):
+    w,h,l,b,t,r=640,340,60,50,56,20
+    lo=min(min(v) for _,v in series)
+    hi=max(max(v) for _,v in series)
+    pad=(hi-lo)*0.08+1e-9
+    lo,hi=lo-pad,hi+pad
+    X= lambda x:l+(x-min(xs))/max(max(xs)-min(xs),1e-9)*(w-l-r)
+    Y= lambda y:h-b-(y-lo)/(hi-lo)*(h-b-t)
+    out=[f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" font-family="sans-serif" font-size="12">',
+        f'<rect width="{w}" height="{h}" fill="#ffffff"/><text x="10" y="22" font-size="15" font-weight="bold" fill="#222">{_esc(title)}</text>']
+    for k in range(5):
+        v=lo+(hi-lo)*k/4
+        out.append(f'<line x1="{l}" y1="{Y(v):.1f}" x2="{w-r}" y2="{Y(v):.1f}" stroke="#e6e6e6"/><text x="{l-6}" y="{Y(v)+4:.1f}" text-anchor="end" fill="#666">{fmt.format(v)}</text>')
+    for x in xs:
+        out.append(f'<text x="{X(x):.1f}" y="{h-b+16}" text-anchor="middle" fill="#666">{x:g}</text>')
+    out.append(f'<text x="{(l+w-r)/2:.0f}" y="{h-10}" text-anchor="middle" fill="#333">{_esc(xlabel)}</text>'
+        f'<text x="14" y="{(t+h-b)/2:.0f}" fill="#333" transform="rotate(-90 14 {(t+h-b)/2:.0f})" text-anchor="middle">{_esc(ylabel)}</text>')
+    for j,(name,ys) in enumerate(series):
+        c=colours[j%len(colours)]
+        out.append(f'<polyline fill="none" stroke="{c}" stroke-width="2.5" points="'+" ".join(f"{X(x):.1f},{Y(y):.1f}" for x,y in zip(xs,ys))+'"/>')
+        out+= [f'<circle cx="{X(x):.1f}" cy="{Y(y):.1f}" r="3.5" fill="{c}"/>' for x,y in zip(xs,ys)]
+        out.append(f'<rect x="{10+j*200}" y="30" width="12" height="12" fill="{c}"/><text x="{27+j*200}" y="41" fill="#333">{_esc(name)}</text>')
+    return "".join(out)+"</svg>"
+# Reads a results CSV back as dicts with numbers converted
+def read_csv(path):
+    rows=list(csv.DictReader(open(path,encoding="utf-8")))
+    for r in rows:
+        for k,v in r.items():
+            try:
+                r[k]=float(v)
+            except (TypeError,ValueError):
+                pass
+    return rows
+# Writes the SVG charts to results/figures: methods vs baselines, ablation, fog-density sweep (from strength_sweep.csv) and runtime vs image size
+def make_charts(pairs):
+    fig=OUT/"figures"
+    fig.mkdir(parents=True,exist_ok=True)
+    # Chart 1: simple one-technique baselines against our modules and the full pipeline, mean over the real fog scenes
+    outs={}
+    for n,(hazy,clear) in pairs.items():
+        o={INPUT:hazy,"Histogram stretching only":C.dehaze_pipeline(hazy,METHODS["Histogram stretching only"]),
+            "Three course modules together":C.dehaze_pipeline(hazy,C.P_MODULES),FULL:C.dehaze_pipeline(hazy,C.P_BALANCED)}
+        o.update(C.baseline_methods(hazy))
+        outs[n]=o
+    names=list(next(iter(outs.values())))
+    def mean_metric(name,fn):
+        return float(np.nanmean([fn(outs[n][name],pairs[n][1]) for n in pairs]))
+    psnr_v=[mean_metric(m,C.psnr) for m in names]
+    ssim_v=[mean_metric(m,C.ssim) for m in names]
+    f1_v=[mean_metric(m,lambda a,b:C.downstream_metrics(a,b)["edge_f1"]) for m in names]
+    (fig/"chart_methods_ssim_f1.svg").write_text(bar_svg(f"Methods against simple baselines, mean over {len(pairs)} real fog scenes (higher is better)",
+        names,[("SSIM",ssim_v),("Edge F1",f1_v)],[SERIES_COLOURS[1],SERIES_COLOURS[2]]),encoding="utf-8")
+    (fig/"chart_methods_psnr.svg").write_text(bar_svg("PSNR against the clear photo (dB)",names,[("PSNR",psnr_v)],[SERIES_COLOURS[1]],fmt="{:.1f}"),encoding="utf-8")
+    # Chart 2: ablation, what removing each part costs
+    rows,_=run(ABLATION,pairs)
+    labs=list(ABLATION)
+    (fig/"chart_ablation.svg").write_text(bar_svg("Ablation on real fog: what each part adds",labs,
+        [("SSIM",[mean_of(rows,m,"ssim") for m in labs]),("Edge F1",[mean_of(rows,m,"edge_f1") for m in labs])],
+        [SERIES_COLOURS[1],SERIES_COLOURS[2]]),encoding="utf-8")
+    # Chart 3: fog-density sweep from results/strength_sweep.csv (run evaluate.py once to create it)
+    sweep=OUT/"strength_sweep.csv"
+    if sweep.exists():
+        rows=read_csv(sweep)
+        for ds in dict.fromkeys(r["dataset"] for r in rows):
+            sel=[r for r in rows if r["dataset"]==ds]
+            betas=sorted({r["beta"] for r in sel})
+            series=[(lab,[float(np.mean([r["ssim"] for r in sel if r["method"]==m and r["beta"]==b])) for b in betas])
+                for lab,m in (("Foggy input",INPUT),("Fixed default",FULL),("Strength from haze level",AUTOSTR))]
+            tag=ds.replace(" ","_")
+            (fig/f"chart_sweep_{tag}.svg").write_text(line_chart_svg(f"SSIM against fog density: {ds}",betas,series,"fog density beta","SSIM vs clear photo",
+                [SERIES_COLOURS[0],SERIES_COLOURS[1],SERIES_COLOURS[2]],"{:.2f}"),encoding="utf-8")
+    # Chart 4: runtime against image size for the full and the Traffic preset
+    sizes=(320,480,640,960,1280)
+    times={"Full pipeline":[],"Traffic preset":[]}
+    for w in sizes:
+        img,_=C.make_sample_scene(w,round(w*0.625))
+        for lab,P in (("Full pipeline",C.P_BALANCED),("Traffic preset",C.P_TRAFFIC)):
+            best=1e9
+            for _ in range(2):
+                t=time.perf_counter()
+                C.dehaze_pipeline(img,P)
+                best=min(best,time.perf_counter()-t)
+            times[lab].append(best)
+    (fig/"chart_runtime.svg").write_text(line_chart_svg("Processing time against image width",sizes,list(times.items()),"image width (px)","seconds",
+        [SERIES_COLOURS[2],SERIES_COLOURS[1]],"{:.2f}"),encoding="utf-8")
+    print("charts written to",fig)
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--max-dim",type=int,default=800,help="downscale test photos to this long edge")
     ap.add_argument("--export-urban",action="store_true",help="(re)write the synthetic city test set to assets/")
+    ap.add_argument("--charts",action="store_true",help="only (re)write the SVG charts in results/figures")
     ap.add_argument("--fit-strength",action="store_true",help="re-run the fit of the haze-adaptive strength rule")
     args=ap.parse_args()
     (OUT/"figures").mkdir(parents=True,exist_ok=True)
     if args.export_urban:
         export_urban()
     pairs=load_pairs(args.max_dim)
+    if args.charts:
+        make_charts(pairs)
+        return
     urban=load_urban()
     streets=load_streets(args.max_dim)
     det_ok=bool(streets) and detect.available()
@@ -533,5 +648,6 @@ def main():
         "the clip is processed by `dehaze_video.TemporalDehazer`.","",video_table(),""]
     (OUT/"summary.md").write_text("\n".join(md),encoding="utf-8")
     print("\n".join(md))
+    make_charts(pairs)
 if __name__=="__main__":
     main()

@@ -29,6 +29,7 @@ class TemporalDehazer:
             g=C.strength_scale(self.haze)
             for k in ("hist","freq","smooth","sharpen"):
                 P[k]=P[k]*g
+            P["far"]=P.get("far",0)*g
             if P["use_dcp"]:
                 P["omega"]=min(0.95,P["omega"]*(0.35+0.65*g))
         # Blurred gray frame; pixels that changed little since the previous frame count as static
@@ -50,7 +51,7 @@ class TemporalDehazer:
                         t=wt*self.t+(1.0-wt)*t
                     # Smooth the airlight over time with an EMA
                     self.t,self.A=t,self._ema(self.A,A,w)
-                    img=C.recover_scene(img,self.t,self.A)
+                    img=C.far_detail(C.recover_scene(img,self.t,self.A),self.t,P.get("far",0))
             elif name=="hist":
                 if P["hist"]>0:
                     _,rng=C.histogram_stretch(img,P["hist"],return_range=True)
@@ -62,7 +63,7 @@ class TemporalDehazer:
                 if C.stage_active("tone",P):
                     if P.get("balance",0):
                         # Smooth the gray-world colour gains over time
-                        self.gains=self._ema(self.gains,C.colour_balance_gains(img,P["balance"]),w)
+                        self.gains=self._ema(self.gains,C.colour_balance_gains(C.colour_restore(img,P.get("restore",0)) if P.get("restore",0) else img,P["balance"]),w) # gains measured after restoration, as in the still pipeline
                     img=C.tone_adjust(img,P["gamma"],P["sat"],P.get("balance",0),gains=self.gains,
                         restore=P.get("restore",0))
             elif C.stage_active(name,P):
@@ -90,8 +91,8 @@ def to_h264(path):
         return True
     except Exception:
         return False
-# Dehazes a video file frame by frame with TemporalDehazer and writes an mp4
-def process_video(src,dst,P=None,auto=False,temporal=True,max_dim=0,max_frames=0,progress=None,auto_blur=False):
+# Dehazes a video file frame by frame with TemporalDehazer and writes an mp4; orig_dst and side_dst also write the scaled original and an original | dehazed side-by-side clip
+def process_video(src,dst,P=None,auto=False,temporal=True,max_dim=0,max_frames=0,progress=None,auto_blur=False,orig_dst=None,side_dst=None):
     # Read frames with OpenCV, downscale with area interpolation, dehaze, write mp4v, then convert to H.264
     cap=cv2.VideoCapture(str(src))
     if not cap.isOpened():
@@ -100,6 +101,7 @@ def process_video(src,dst,P=None,auto=False,temporal=True,max_dim=0,max_frames=0
     n_total=int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     dehazer=TemporalDehazer(P,auto=auto,smoothing=0.9 if temporal else 0.0)
     writer,n,t0=None,0,time.perf_counter()
+    extra={} # optional second and third writers: key -> (writer, path)
     while True:
         ok,bgr=cap.read()
         if not ok or (max_frames and n>=max_frames):
@@ -112,8 +114,17 @@ def process_video(src,dst,P=None,auto=False,temporal=True,max_dim=0,max_frames=0
             dehazer.base=C.auto_deblur_params(rgb,dehazer.base)[0]
         out=dehazer.process(rgb)
         if writer is None:
-            writer=cv2.VideoWriter(str(dst),cv2.VideoWriter_fourcc(*"mp4v"),fps,(out.shape[1],out.shape[0]))
+            fourcc=cv2.VideoWriter_fourcc(*"mp4v")
+            writer=cv2.VideoWriter(str(dst),fourcc,fps,(out.shape[1],out.shape[0]))
+            if orig_dst:
+                extra["orig"]=(cv2.VideoWriter(str(orig_dst),fourcc,fps,(out.shape[1],out.shape[0])),orig_dst)
+            if side_dst:
+                extra["side"]=(cv2.VideoWriter(str(side_dst),fourcc,fps,(2*out.shape[1],out.shape[0])),side_dst)
         writer.write(cv2.cvtColor(out,cv2.COLOR_RGB2BGR))
+        if "orig" in extra:
+            extra["orig"][0].write(bgr)
+        if "side" in extra:
+            extra["side"][0].write(np.hstack([bgr,cv2.cvtColor(out,cv2.COLOR_RGB2BGR)]))
         n+=1
         if progress:
             progress(n,min(n_total,max_frames) if max_frames and n_total else (max_frames or n_total))
@@ -121,6 +132,9 @@ def process_video(src,dst,P=None,auto=False,temporal=True,max_dim=0,max_frames=0
     if writer is not None:
         writer.release()
         to_h264(dst)
+        for w,path in extra.values():
+            w.release()
+            to_h264(path)
     return n,(time.perf_counter()-t0)/max(n,1)
 # Command-line entry point
 def main():

@@ -65,12 +65,8 @@ def noise_sigma(y):
     # Convolve with the mask, then sigma = sqrt(pi/2) * sum|r| / (6 * (W-2) * (H-2))
     r=cv2.filter2D(y.astype(np.float32),-1,k)[1:-1,1:-1]
     return float(np.sqrt(math.pi/2.0)*np.abs(r).sum()/(6.0*max(1,(h-2)*(w-2))))
-# Adaptive sharpening: clipped unsharp mask on luminance, weighted by a Sobel activity map and the noise level
-def adaptive_sharpening(img,strength=50):
-    amount=edge_gain(strength)
-    if amount<=0:
-        return img
-    ycc,y=_to_ycc(img)
+# Sharpening internals shared by the filter and its weight map: clipped unsharp detail and the activity-based weight
+def _sharpen_parts(y):
     # Unsharp-mask detail = y - Gaussian blur (sigma 1.5), clipped to +-40 to avoid halos
     detail=np.clip(y-cv2.GaussianBlur(y,(0,0),1.5),-40.0,40.0)
     # Sobel gradient magnitude smoothed by a Gaussian = local activity map
@@ -80,7 +76,14 @@ def adaptive_sharpening(img,strength=50):
     floor=float(np.clip(0.45-0.05*sigma,0.15,0.45)) # share of the detail kept in flat areas
     knee=6.0+4.0*sigma # gradient level that counts as real structure
     # Weight: small share of the detail in flat areas, rising to 1 on real structure
-    weight=floor+(1.0-floor)*np.clip(activity/knee,0.0,1.0)
+    return detail,floor+(1.0-floor)*np.clip(activity/knee,0.0,1.0)
+# Adaptive sharpening: clipped unsharp mask on luminance, weighted by a Sobel activity map and the noise level
+def adaptive_sharpening(img,strength=50):
+    amount=edge_gain(strength)
+    if amount<=0:
+        return img
+    ycc,y=_to_ycc(img)
+    detail,weight=_sharpen_parts(y)
     # Sharpened luminance = y + amount * weight * detail
     return _from_ycc(ycc,y+amount*weight*detail)
 # CLAHE (contrast-limited adaptive histogram equalisation) on the CIELAB L channel, blended with the input
@@ -635,4 +638,78 @@ def downstream_metrics(img,ref=None):
         out["edge_f1"]=edge_f1(edges,ref_edges)[2]
         out["edge_f1_auto"]=edge_f1(canny_edges(img,True),canny_edges(ref,True))[2]
         out["line_recall"]=line_recall(lines,hough_lines(ref_edges))
+    return out
+# Colour-maps (INFERNO) a non-negative float map, scaled so vmax becomes white-yellow
+def heat_image(m,vmax=None):
+    vmax=float(vmax) if vmax else max(float(m.max()),1e-6)
+    g=np.clip(m/vmax*255.0+0.5,0,255).astype(np.uint8)
+    return cv2.cvtColor(cv2.applyColorMap(g,cv2.COLORMAP_INFERNO),cv2.COLOR_BGR2RGB)
+# Log-magnitude spectrum of the luminance: Hann window against edge leakage, 2-D FFT, zero frequency centred
+def _log_spectrum(img):
+    y=_to_ycc(img)[1]
+    h,w=y.shape
+    win=np.outer(np.hanning(h),np.hanning(w)).astype(np.float32)
+    return np.log1p(np.abs(fftshift(fft2((y-y.mean())*win))))
+# Spectrum picture (log magnitude, INFERNO) and the scale used, so two images can share one scale
+def spectrum_image(img,vmax=None):
+    s=_log_spectrum(img)
+    vmax=float(vmax) if vmax else float(np.percentile(s,99.9))
+    return heat_image(s,vmax),vmax
+# Radially averaged log spectrum: mean log magnitude per frequency ring, 0 = DC and 1 = Nyquist along the short side
+def radial_spectrum(img,bins=64):
+    s=_log_spectrum(img)
+    h,w=s.shape
+    r=np.hypot(np.arange(w)[None,:]-w//2,np.arange(h)[:,None]-h//2)/(min(h,w)/2.0)
+    m=r<1.0
+    idx=(r[m]*bins).astype(int)
+    return (np.arange(bins)+0.5)/bins,np.bincount(idx,s[m],bins)/np.maximum(np.bincount(idx,minlength=bins),1)
+# Response of the frequency-domain filter along the same radius axis as radial_spectrum: 1 + (gain - 1) * Gaussian high-pass
+def freq_response_curve(strength,cutoff=FREQ_CUTOFF,shape=(400,640),bins=64):
+    h,w=shape
+    pad=max(0,min(48,h-1,w-1))
+    short=min(h,w)+2*pad # the filter works on the mirror-padded image
+    r=(np.arange(bins)+0.5)/bins
+    d=r*short/2.0
+    return r,1.0+(freq_gain(strength)-1.0)*(1.0-np.exp(-d**2/(2.0*cutoff**2)))
+# Per-pixel sharpening gain (amount * weight) that the adaptive unsharp mask applies
+def sharpen_weight_map(img,strength):
+    return edge_gain(strength)*_sharpen_parts(_to_ycc(img)[1])[1]
+# Mean absolute change per pixel made by the adaptive (bilateral) smoothing
+def smoothing_change_map(img,strength):
+    return np.abs(adaptive_smoothing(img,strength).astype(np.float32)-img.astype(np.float32)).mean(2)
+# Global histogram equalisation of the luminance (YCrCb), the classic baseline
+def hist_equalise(img):
+    ycc=cv2.cvtColor(img,cv2.COLOR_RGB2YCrCb)
+    ycc[:,:,0]=cv2.equalizeHist(ycc[:,:,0])
+    return cv2.cvtColor(ycc,cv2.COLOR_YCrCb2RGB)
+# Simple one-technique baselines that the full pipeline is compared with
+def baseline_methods(img):
+    dcp_only=dict(P_BALANCED,hist=0,freq=0,smooth=0,sharpen=0,clahe=0,restore=0,gamma=1.0,balance=0,far=0,sat=1.0)
+    return {"Histogram equalisation":hist_equalise(img),"CLAHE only":clahe_enhance(img,60,8),
+        "Gamma only (1.5)":tone_adjust(img,1.5),
+        # Plain (non-adaptive) unsharp mask: 2 * image - Gaussian blur (sigma 1.5)
+        "Plain unsharp mask":cv2.addWeighted(img,2.0,cv2.GaussianBlur(img,(0,0),1.5),-1.0,0),
+        "Dark channel prior only":dehaze_pipeline(img,dcp_only)}
+# Draws detection boxes on a copy of the image: red cars and trucks, orange motorcycles and people, with small filled class labels
+def draw_boxes(img,dets,color=(255,64,64)):
+    out=img.copy()
+    t=max(1,round(max(out.shape[:2])/700))
+    for x0,y0,x1,y1,sc,name in dets:
+        col=(255,150,0) if name in ("motorcycle","bicycle","person") else color
+        cv2.rectangle(out,(int(x0),int(y0)),(int(x1),int(y1)),col,t)
+        label=f"{name} {sc:.2f}"
+        (tw,th),_=cv2.getTextSize(label,cv2.FONT_HERSHEY_SIMPLEX,0.4,1)
+        ty=max(th+3,int(y0))
+        # Filled label background keeps the text readable over a busy scene
+        cv2.rectangle(out,(int(x0),ty-th-3),(int(x0)+tw+3,ty),col,-1)
+        cv2.putText(out,label,(int(x0)+2,ty-2),cv2.FONT_HERSHEY_SIMPLEX,0.4,(255,255,255),1,cv2.LINE_AA)
+    return out
+# Construction-inspection overlay: dimmed image with Canny edges (red) and Hough line segments (green)
+def edge_overlay(img):
+    edges=canny_edges(img)
+    out=(img.astype(np.float32)*0.55).astype(np.uint8)
+    out[cv2.dilate(edges,np.ones((2,2),np.uint8))>0]=(255,64,64)
+    t=max(1,round(max(out.shape[:2])/500))
+    for x0,y0,x1,y1 in hough_lines(edges).astype(int):
+        cv2.line(out,(x0,y0),(x1,y1),(64,255,96),t)
     return out

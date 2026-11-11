@@ -14,7 +14,7 @@ import streamlit as st
 from PIL import Image,ImageOps,UnidentifiedImageError
 from dehaze_video import process_video
 from dehaze_core import ( # the image-processing code lives in dehaze_core.py
-    P_BALANCED,P_MODULES,P_TRAFFIC,STAGE_ORDER,apply_stage,auto_strength_params,dehaze_pipeline,
+    P_BALANCED,P_MODULES,P_TRAFFIC,STAGE_ORDER,apply_stage,baseline_methods,draw_boxes,hist_clip_percent,histogram_stretch,edge_overlay,freq_response_curve,heat_image,radial_spectrum,sharpen_weight_map,smoothing_change_map,spectrum_image,auto_strength_params,dehaze_pipeline,
     downstream_metrics,edge_maps,estimate_blur as _estimate_blur,haze_level as _haze_level,strength_scale,make_sample_scene,psnr,quality_metrics,simulate_blur as _simulate_blur,
     simulate_fog as _simulate_fog,ssim,stage_active,transmission_map_image,visibility_metrics,
 )
@@ -30,6 +30,7 @@ simulate_fog=st.cache_data(show_spinner=False)(_simulate_fog)
 simulate_blur=st.cache_data(show_spinner=False)(_simulate_blur)
 estimate_blur=st.cache_data(show_spinner=False,max_entries=6)(_estimate_blur)
 downstream=st.cache_data(show_spinner=False,max_entries=8)(downstream_metrics) # Canny + Hough counts
+baselines=st.cache_data(show_spinner=False,max_entries=3)(baseline_methods) # one-technique baselines for the Compare view
 haze_of=st.cache_data(show_spinner=False,max_entries=6)(_haze_level)
 MAX_DIM=1200 # images larger than this (on the long edge) are downscaled
 # Before/after slider image: original left of the divider, dehazed right, with a red divider line
@@ -42,9 +43,10 @@ def compare_composite(a,b,pos):
         out[:,max(0,x-1):min(w,x+1)]=(211,47,47)
     return out
 # Overlaid histogram line plot drawn as inline SVG polylines
-def hist_svg(series,w=520,h=150,label="Histogram"):
+def hist_svg(series,w=520,h=150,label="Histogram",marks=()):
     m=max(max(s[0].max() for s in series),1.0)
-    lines=""
+    # Optional vertical marks (bin, colour), e.g. the histogram-stretch clip points
+    lines="".join(f'<line x1="{b*w/255:.1f}" y1="0" x2="{b*w/255:.1f}" y2="{h}" stroke="{c}" stroke-width="2" stroke-dasharray="4 3"/>' for b,c in marks)
     for hh,colour,dashed in series:
         # Polyline points: x over the 256 bins, y scaled to the tallest histogram
         pts=" ".join(f"{i*w/255:.1f},{h-4-(v/m)*(h-10):.1f}" for i,v in enumerate(hh))
@@ -67,6 +69,29 @@ def curve_svg(curves,w=520,h=240,label="Gamma curve"):
         f'<text x="2" y="14" font-size="11" fill="#888">out</text>')
     return (f'<svg viewBox="0 0 {w} {h}" width="100%" role="img" aria-label="{label}" '
         f'style="background:#fafafa;border:1px solid rgba(0,0,0,.08);border-radius:.35rem">{grid}{lines}{axes}</svg>')
+# Line chart as inline SVG on a 0..1 x axis: series are (xs, ys, colour, dashed); y is scaled to the data range
+def line_svg(series,w=520,h=200,label="Chart",xlabel="",ylabel=""):
+    p=30
+    lo=min(float(np.min(s[1])) for s in series)
+    hi=max(float(np.max(s[1])) for s in series)
+    span=max(hi-lo,1e-6)
+    grid="".join(f'<line x1="{p+i*(w-p-6)/4:.1f}" y1="6" x2="{p+i*(w-p-6)/4:.1f}" y2="{h-p}" stroke="#e6e6e6"/>'
+        f'<line x1="{p}" y1="{6+i*(h-p-6)/4:.1f}" x2="{w-6}" y2="{6+i*(h-p-6)/4:.1f}" stroke="#e6e6e6"/>' for i in range(5))
+    lines=""
+    for xs,ys,colour,dashed in series:
+        pts=" ".join(f"{p+x*(w-p-6):.1f},{h-p-(y-lo)/span*(h-p-6):.1f}" for x,y in zip(xs,ys))
+        lines+=(f'<polyline fill="none" stroke="{colour}" stroke-width="2.5" '
+            f'{"stroke-dasharray=\"6 4\" " if dashed else ""}points="{pts}"/>')
+    ticks=(f'<text x="{p}" y="{h-8}" font-size="11" fill="#888">0</text><text x="{w-24}" y="{h-8}" font-size="11" fill="#888">1</text>'
+        f'<text x="{w/2-40:.0f}" y="{h-8}" font-size="11" fill="#888">{xlabel}</text>'
+        f'<text x="2" y="14" font-size="11" fill="#888">{hi:.1f}</text><text x="2" y="{h-p}" font-size="11" fill="#888">{lo:.1f}</text>'
+        f'<text x="{p+4}" y="16" font-size="11" fill="#888">{ylabel}</text>')
+    return (f'<svg viewBox="0 0 {w} {h}" width="100%" role="img" aria-label="{label}" '
+        f'style="background:#fafafa;border:1px solid rgba(0,0,0,.08);border-radius:.35rem">{grid}{lines}{ticks}</svg>')
+# Clip points (low, high) the histogram stretch would use on an image, and the % clipped at each end; strength 0 shows the 20 default
+def stretch_points(img,strength):
+    strength=strength or 20
+    return (*histogram_stretch(img,strength,return_range=True)[1],hist_clip_percent(strength))
 # Effective gamma of an image: the g for which a mid-grey (0.5) maps to the image's median brightness, i.e. m = 0.5^(1/g), so g > 1 means a bright image
 def effective_gamma(img):
     m=float(np.clip(np.median(cv2.cvtColor(img,cv2.COLOR_RGB2GRAY))/255.0,0.02,0.98))
@@ -129,6 +154,11 @@ def run_pipeline(img,P):
     t=time.perf_counter()
     out=dehaze_pipeline(img,P)
     return out,time.perf_counter()-t
+# YOLOv5n detections (cached), optionally also on overlapping tiles for small objects
+@st.cache_data(show_spinner="Detecting vehicles…",max_entries=6)
+def detect_vehicles(img,conf,tiled):
+    import detect as D
+    return (D.detect_tiled if tiled else D.detect)(img,conf)
 # Image after every stage, cumulatively, with whether each stage is active
 @st.cache_data(show_spinner=False,max_entries=3)
 def run_stages(img,P):
@@ -146,6 +176,9 @@ def resize_max(img,max_dim=MAX_DIM):
         new_size=(max(1,round(w*scale)),max(1,round(h*scale)))
         img=cv2.resize(img,new_size,interpolation=cv2.INTER_AREA)
     return img
+# Decodes PNG bytes back to an RGB array
+def png_to_rgb(data):
+    return np.array(Image.open(io.BytesIO(data)).convert("RGB"))
 # Encodes an RGB array as PNG bytes
 def to_png_bytes(img):
     buf=io.BytesIO()
@@ -406,7 +439,7 @@ table.ufc-m td b{color:#d32f2f;font-weight:600;}
 render_title()
 render_header()
 SAMPLE_LABEL,PLACEHOLDER="Sample scene (synthetic city)","Or try a sample…"
-VIEWS=["Side by side","Slider","Original","Dehazed","Stages","Edges","Transmission"]
+VIEWS=["Side by side","Slider","Original","Dehazed","Stages","Edges","Transmission","Modules","Compare","Applications"]
 STAGE_LABELS=["01 Dark Channel","02 Deblur","05 Smoothing","06 Sharpening","03 Histogram","03b CLAHE","04 Frequency","07 Tone"] # run order
 for _k,_v in {"source_key":None,"source_img":None,"source_depth":None,"reference":None,
     "pre_foggy":True,"fog_density":1.6,"upload_round":0,"upload_error":None,
@@ -580,6 +613,13 @@ with left_col:
                     "This stage only applies just the picked stage to the original.")
             with st.spinner("Processing…"):
                 result,proc_s=run_pipeline(hazy,P)
+            # Only when fog (and blur) were simulated is there a clear reference: the photo itself.
+            ref=raw if not st.session_state.pre_foggy else None
+            if ref is None and st.session_state.reference is not None: # a bundled photo that comes with its clear version
+                ref_key,ref_img=st.session_state.reference
+                if ref_key==st.session_state.source_key and ref_img.shape==hazy.shape:
+                    ref=ref_img
+            ref_for_compare=ref
             with st.container(key="preview_images"):
                 if view=="Side by side":
                     col_before,col_after=st.columns(2)
@@ -625,6 +665,76 @@ with left_col:
                         st.image(transmission_map_image(hazy,P),width="stretch",
                             caption="Estimated transmission t (dark = thick haze, bright = clear)"
                             if P["use_dcp"] else "Dark channel is off, so this is the map it would estimate")
+                elif view=="Modules":
+                    # Course modules made visible: FFT spectrum, histogram clip points, adaptive smoothing and sharpening maps
+                    steps=run_stages(hazy,P)
+                    st.markdown("**Frequency-domain enhancement**")
+                    s0,vmax=spectrum_image(hazy)
+                    s1,_=spectrum_image(result,vmax)
+                    col_b,col_a=st.columns(2)
+                    col_b.image(s0,caption="Spectrum of the original (log magnitude, centre = low frequency)",width="stretch")
+                    col_a.image(s1,caption="Spectrum of the dehazed image (same scale)",width="stretch")
+                    rx,r0=radial_spectrum(hazy)
+                    _,r1=radial_spectrum(result)
+                    fx,fy=freq_response_curve(P["freq"],P["cutoff"],hazy.shape[:2])
+                    col_b.markdown('<p class="ufc-cap">Mean spectrum by frequency: original (grey), dehazed (red)</p>'
+                        +line_svg([(rx,r0,"#9a9a9a",False),(rx,r1,"#d32f2f",False)],label="Radial spectrum",xlabel="frequency (1 = Nyquist)",ylabel="log |F|"),unsafe_allow_html=True)
+                    col_a.markdown(f'<p class="ufc-cap">Frequency filter gain (1 + (g - 1) &middot; Gaussian high-pass), freq strength {P["freq"]:.0f}, cutoff {P["cutoff"]}</p>'
+                        +line_svg([(fx,fy,"#1e88e5",False),(fx,np.ones_like(fy),"#555555",True)],label="Frequency filter response",xlabel="frequency (1 = Nyquist)",ylabel="gain"),unsafe_allow_html=True)
+                    st.markdown("**Histogram stretching**")
+                    h_in,h_out=steps[STAGE_ORDER.index("hist")][1],steps[STAGE_ORDER.index("hist")+1][1]
+                    lo,hi,pc=stretch_points(h_in,P["hist"])
+                    y_in=quality_metrics(h_in)["hist"]
+                    y_out=quality_metrics(h_out)["hist"]
+                    col_b,col_a=st.columns(2)
+                    col_b.markdown(f'<p class="ufc-cap">Before stretch, clip points {lo:.0f} and {hi:.0f} ({pc:.2f}% clipped each end)</p>'
+                        +hist_svg([(y_in,"#9a9a9a",False)],marks=[(lo,"#1e88e5"),(hi,"#1e88e5")],label="Histogram before stretch"),unsafe_allow_html=True)
+                    col_a.markdown('<p class="ufc-cap">After stretch: the range fills 0 to 255</p>'
+                        +hist_svg([(y_out,"#d32f2f",False)],label="Histogram after stretch"),unsafe_allow_html=True)
+                    st.markdown("**Adaptive smoothing and sharpening**")
+                    sm_in,sh_in=steps[STAGE_ORDER.index("smooth")][1],steps[STAGE_ORDER.index("sharpen")][1]
+                    sw=sharpen_weight_map(sh_in,P["sharpen"] or 50)
+                    sc=smoothing_change_map(sm_in,P["smooth"] or 50)
+                    col_b,col_a=st.columns(2)
+                    col_b.image(heat_image(sc,max(float(np.percentile(sc,99.5)),1.0)),width="stretch",
+                        caption="Smoothing: where the bilateral filter changes pixels (bright = flat noisy areas, dark = edges kept)")
+                    col_a.image(heat_image(sw,max(float(sw.max()),1e-3)),width="stretch",
+                        caption="Sharpening gain map (bright = real structure, dark = flat or noisy areas)")
+                    if not (P["freq"]>0 and P["hist"]>0 and P["smooth"]>0 and P["sharpen"]>0):
+                        st.caption("A module is set to 0 in the pipeline, so its panels show what it would do at the default strength or no change.")
+                elif view=="Compare":
+                    # Full pipeline against single-technique baselines
+                    base=baselines(hazy)
+                    cmp_items=[("Original",hazy)]+list(base.items())+[("Ours (full pipeline)",result)]
+                    cols=st.columns(3)
+                    for i,(nm,im) in enumerate(cmp_items):
+                        q=quality_metrics(im)
+                        cap=f"{nm} · contrast {q['contrast']:.1f} · edges {q['edges']:.1f}%"
+                        if ref_for_compare is not None and ref_for_compare.shape==im.shape:
+                            cap+=f" · PSNR {psnr(im,ref_for_compare):.1f} dB · SSIM {ssim(im,ref_for_compare):.3f}"
+                        cols[i%3].image(im,caption=cap,width="stretch")
+                elif view=="Applications":
+                    # Traffic monitoring (YOLOv5n vehicle detection) and construction inspection (Canny + Hough overlays) before and after
+                    t_traffic,t_build=st.tabs(["Traffic monitoring","Construction inspection"])
+                    with t_traffic:
+                        sens=st.slider("Detection confidence",0.10,0.60,0.20,0.05,key="det_conf",
+                            help="Lower finds more (and fainter) vehicles, but also more false ones")
+                        tiled=st.toggle("Search tiles for small and distant vehicles",value=True,key="det_tiled",
+                            help="Also runs the detector on overlapping zoomed-in tiles, which finds motorcycles and cars far away in the fog")
+                        try:
+                            d_in,d_out=detect_vehicles(hazy,sens,tiled),detect_vehicles(result,sens,tiled)
+                            col_b,col_a=st.columns(2)
+                            col_b.image(draw_boxes(hazy,d_in),width="stretch",caption=f"Original: {len(d_in)} vehicles and people detected")
+                            col_a.image(draw_boxes(result,d_out),width="stretch",caption=f"Dehazed: {len(d_out)} vehicles and people detected")
+                        except Exception as exc:
+                            st.caption(f"Detection model not available here ({type(exc).__name__}); see detect.py to download yolov5n.onnx.")
+                    with t_build:
+                        e_in,e_out=downstream(hazy),downstream(result)
+                        col_b,col_a=st.columns(2)
+                        col_b.image(edge_overlay(hazy),width="stretch",
+                            caption=f"Original: edges {e_in['canny_pct']:.1f}% of pixels, {e_in['lines']} lines ({e_in['lines_vertical']} vertical)")
+                        col_a.image(edge_overlay(result),width="stretch",
+                            caption=f"Dehazed: edges {e_out['canny_pct']:.1f}% of pixels, {e_out['lines']} lines ({e_out['lines_vertical']} vertical)")
                 elif view=="Original":
                     st.image(hazy,caption="Original",width="stretch")
                 else:
@@ -633,12 +743,6 @@ with left_col:
             st.markdown('<div class="card-heading" style="font-size:1.5rem;margin-top:1.4rem">Measurements</div>',
                 unsafe_allow_html=True)
             m0,m1=quality_metrics(hazy),quality_metrics(result)
-            # Only when fog (and blur) were simulated is there a clear reference: the photo itself.
-            ref=raw if not st.session_state.pre_foggy else None
-            if ref is None and st.session_state.reference is not None: # a bundled photo that comes with its clear version
-                ref_key,ref_img=st.session_state.reference
-                if ref_key==st.session_state.source_key and ref_img.shape==hazy.shape:
-                    ref=ref_img
             # Canny edge and Hough line counts before and after
             d0,d1=downstream(hazy,ref),downstream(result,ref)
             vis=visibility_metrics(hazy,result)
@@ -692,6 +796,15 @@ with left_col:
                 +curve_svg([(gx,gx,"#555555",True,1.5),(gx,255*(gx/255)**(1/g0),"#9a9a9a",False,3),
                     (gx,255*(gx/255)**(1/g1),"#d32f2f",False,3)],label="Gamma curves, original and dehazed"),
                 unsafe_allow_html=True)
+            # Downloads: side-by-side PNG and the measurements as CSV
+            csv_rows=[("metric","original","dehazed")]+[(k,f"{m0[k]:.4f}",f"{m1[k]:.4f}") for k in ("contrast","entropy","gradient","edges")]
+            csv_rows+=[(k,f"{d0[k]:.4f}",f"{d1[k]:.4f}") for k in ("canny_pct","lines","lines_vertical","lines_oblique")]
+            csv_rows+=[("visible_edge_gain_e","",f"{vis['e']:.4f}"),("gradient_ratio_r","",f"{vis['r']:.4f}"),("newly_clipped_pct","",f"{100*vis['sigma']:.4f}")]
+            if ref is not None:
+                csv_rows+=[("psnr_vs_clear_db",f"{psnr(hazy,ref):.4f}",f"{psnr(result,ref):.4f}"),("ssim_vs_clear",f"{ssim(hazy,ref):.4f}",f"{ssim(result,ref):.4f}")]
+            dl1,dl2=st.columns(2)
+            dl1.download_button("Download before/after PNG",data=to_png_bytes(np.hstack([hazy,result])),file_name="before_after.png",mime="image/png",width="stretch")
+            dl2.download_button("Download measurements CSV",data="\n".join(",".join(r) for r in csv_rows),file_name="measurements.csv",mime="text/csv",width="stretch")
 # Right card: enhancement pipeline controls
 # HTML heading row of a pipeline stage
 def _stage_row(num,label,value):
@@ -866,7 +979,7 @@ with lower_col:
                     q0,q1=quality_metrics(img_b),quality_metrics(out_b)
                     results.append({"name":f.name,"size":f"{img_b.shape[1]}x{img_b.shape[0]}","sec":sec,
                             "contrast":q1["contrast"]/max(q0["contrast"],1e-3),
-                            "edges":q1["edges"]/max(q0["edges"],1e-3),"png":to_png_bytes(out_b)})
+                            "edges":q1["edges"]/max(q0["edges"],1e-3),"png":to_png_bytes(out_b),"orig":to_png_bytes(img_b)})
                 bar.progress((i+1)/len(batch_files))
             bar.empty()
             st.session_state.batch_results=results
@@ -875,11 +988,33 @@ with lower_col:
             if "error" in r:
                 st.error(r["error"])
         if done:
-            body="".join(f"<tr><td>{r['name']}</td><td>{r['size']}</td><td>{r['sec']:.2f}</td>"
-                f"<td>{r['contrast']:.2f}</td><td>{r['edges']:.2f}</td></tr>" for r in done)
-            st.markdown('<table class="ufc-m"><tr><th>Photo</th><th>Size</th><th>Time (s)</th>'
-                f'<th>Contrast &times;</th><th>Edge pixels &times;</th></tr>{body}</table>',
-                unsafe_allow_html=True)
+            st.segmented_control("Batch view",["Table","All images","Side by side","Slider"],default="Table",
+                key="batch_view",label_visibility="collapsed")
+            bview=st.session_state.get("batch_view") or "Table"
+            if bview=="Table":
+                body="".join(f"<tr><td>{r['name']}</td><td>{r['size']}</td><td>{r['sec']:.2f}</td>"
+                    f"<td>{r['contrast']:.2f}</td><td>{r['edges']:.2f}</td></tr>" for r in done)
+                st.markdown('<table class="ufc-m"><tr><th>Photo</th><th>Size</th><th>Time (s)</th>'
+                    f'<th>Contrast &times;</th><th>Edge pixels &times;</th></tr>{body}</table>',
+                    unsafe_allow_html=True)
+            elif bview=="All images":
+                # Every photo in the batch: original on the left, dehazed on the right
+                for r in done:
+                    ca,cb=st.columns(2)
+                    ca.image(r["orig"],caption=f"{r['name']} (original)",width="stretch")
+                    cb.image(r["png"],caption=f"{r['name']} (dehazed)",width="stretch")
+            else:
+                # One photo at a time: pick it, then compare side by side or with a divider
+                pick=st.selectbox("Photo",[r["name"] for r in done],key="batch_pick")
+                r=next(x for x in done if x["name"]==pick)
+                if bview=="Slider":
+                    pos=st.slider("Compare position",0,100,50,key="batch_pos",label_visibility="collapsed")
+                    st.image(compare_composite(png_to_rgb(r["orig"]),png_to_rgb(r["png"]),pos),
+                        caption=f"Original (left) · Dehazed (right) · divider at {pos}%",width="stretch")
+                else:
+                    ca,cb=st.columns(2)
+                    ca.image(r["orig"],caption="Original",width="stretch")
+                    cb.image(r["png"],caption="Dehazed",width="stretch")
             buf=io.BytesIO()
             with zipfile.ZipFile(buf,"w",zipfile.ZIP_DEFLATED) as zf:
                 for r in done:
@@ -901,15 +1036,16 @@ with lower_col:
         if vid is not None and st.button("Process video",type="primary",key="video_go"):
             with tempfile.TemporaryDirectory() as td:
                 src,dst=Path(td)/("in"+Path(vid.name).suffix),Path(td)/"out.mp4"
+                orig_dst,side_dst=Path(td)/"orig.mp4",Path(td)/"side.mp4"
                 src.write_bytes(vid.getvalue())
                 bar=st.progress(0.0)
                 try:
                     # Temporal dehazing of the clip: smoothed estimates and denoising of static pixels
                     n_fr,spf=process_video(
                         src,dst,P=current_params(),auto=st.session_state.strength_auto,temporal=v_smooth,
-                        max_dim=640,max_frames=v_frames,auto_blur=st.session_state.deblur_auto and not st.session_state.modules_only,
+                        max_dim=640,max_frames=v_frames,orig_dst=orig_dst,side_dst=side_dst,auto_blur=st.session_state.deblur_auto and not st.session_state.modules_only,
                         progress=lambda i,total:bar.progress(min(1.0,i/max(total,1))))
-                    st.session_state.video_result=(dst.read_bytes(),n_fr,spf) if n_fr else None
+                    st.session_state.video_result=(dst.read_bytes(),n_fr,spf,orig_dst.read_bytes(),side_dst.read_bytes()) if n_fr else None
                     st.session_state.video_error=None if n_fr else "No frames could be read from that file."
                 except Exception as exc:
                     st.session_state.video_result,st.session_state.video_error=None,f"Could not process that video: {exc}"
@@ -917,8 +1053,14 @@ with lower_col:
         if st.session_state.get("video_error"):
             st.error(st.session_state.video_error)
         if st.session_state.get("video_result"):
-            vdata,n_fr,spf=st.session_state.video_result
-            st.video(vdata)
+            vdata,n_fr,spf,odata,sdata=st.session_state.video_result
+            st.segmented_control("Video view",["Side by side","Dehazed","Original"],default="Side by side",
+                key="video_view",label_visibility="collapsed")
+            vview=st.session_state.get("video_view") or "Side by side"
+            # One clip with the original on the left and the dehazed frames on the right, so both play in sync
+            st.video({"Side by side":sdata,"Dehazed":vdata,"Original":odata}[vview])
+            if vview=="Side by side":
+                st.caption("Original (left) · Dehazed (right)")
             st.caption(f"{n_fr} frames, {spf:.2f} s per frame.")
             st.download_button("Download video",data=vdata,file_name="dehazed_video.mp4",mime="video/mp4")
     with st.container(border=True,key="method_card"):
