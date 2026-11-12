@@ -28,7 +28,7 @@ def smoothing_tolerance(strength):
 # Maps strength to the unsharp-mask amount
 def edge_gain(strength):
     return (strength/100.0)*2.0
-# RGB to YCrCb conversion; returns the full image and its luminance Y
+# RGB to YCrCb conversion; returns the full image and its luminance Y ( brightness channel) scaled to 0..255
 def _to_ycc(img):
     ycc=cv2.cvtColor(img.astype(np.float32)/255.0,cv2.COLOR_RGB2YCrCb)
     return ycc,ycc[:,:,0]*255.0
