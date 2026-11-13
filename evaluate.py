@@ -12,6 +12,7 @@ ROOT=Path(__file__).parent
 TEST=ROOT/"assets"/"test images"
 DATA=TEST/"outdoor_fog_with_clear_reference"
 URBAN_REAL=TEST/"urban_with_clear_reference" # optional: your own street photos with clear references, see README
+URBAN_REAL_FOGGY=TEST/"urban_real_foggy" # unpaired real fog/smog images; no clear references
 URBAN_STREETS=TEST/"urban_real_clear" # clear real street photos, downloaded by get_street_photos.py
 URBAN_SYN=TEST/"urban_synthetic"
 OUT=ROOT/"results"
@@ -44,6 +45,11 @@ ABLATION={
     "without all three course modules":dict(C.P_BALANCED,hist=0,freq=0,smooth=0,sharpen=0),
     "without the dark channel prior":dict(C.P_BALANCED,use_dcp=False),
     "without colour balance":dict(C.P_BALANCED,balance=0),
+    "without CLAHE":dict(C.P_BALANCED,clahe=0),
+    "without colour restoration":dict(C.P_BALANCED,restore=0),
+    "without the adaptive dark channel":dict(C.P_BALANCED,adaptive=False),
+    "without the three course modules and CLAHE":dict(C.P_BALANCED,hist=0,freq=0,smooth=0,sharpen=0,clahe=0),
+    "without CLAHE, colour restoration and the adaptive dark channel":dict(C.P_BALANCED,clahe=0,restore=0,adaptive=False),
     "without frequency, sharpening, smoothing and colour balance (Traffic preset)":C.P_TRAFFIC,
 }
 # The methods plus Wiener-deblur variants: blur known, blur estimated, and everything automatic
@@ -348,7 +354,9 @@ def video_table(n=30,noise=2.0,seed=0):
     outs={}
     for name,kw in (("Every frame on its own",dict(smoothing=0.0)),("Temporal (smoothed estimates + denoising)",dict()),
         ("Every frame on its own, strength from haze level",dict(smoothing=0.0,auto=True)),
-        ("Temporal, strength from haze level",dict(auto=True))):
+        ("Temporal, strength from haze level",dict(auto=True)),
+        ("Temporal, CLAHE off",dict(P=dict(C.P_BALANCED,clahe=0))),
+        ("Temporal, CLAHE off, strength from haze level",dict(P=dict(C.P_BALANCED,clahe=0),auto=True))):
         d=TemporalDehazer(**kw)
         t=time.perf_counter()
         out=[d.process(f) for f in fog]
@@ -472,14 +480,140 @@ def make_charts(pairs):
     (fig/"chart_runtime.svg").write_text(line_chart_svg("Processing time against image width",sizes,list(times.items()),"image width (px)","seconds",
         [SERIES_COLOURS[2],SERIES_COLOURS[1]],"{:.2f}"),encoding="utf-8")
     print("charts written to",fig)
+
+def load_unpaired_real_fog(max_dim):
+    """Load real fog/smog photographs without assuming a clear reference exists."""
+    supported={".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+    images={}
+    if not URBAN_REAL_FOGGY.exists():
+        return images
+    for path in sorted(URBAN_REAL_FOGGY.iterdir()):
+        if path.suffix.lower() not in supported:
+            continue
+        raw=cv2.imread(str(path),cv2.IMREAD_COLOR)
+        if raw is None:
+            continue
+        images[path.stem]=_resize(cv2.cvtColor(raw,cv2.COLOR_BGR2RGB),max_dim)
+    return images
+
+def colorfulness_metric(img):
+    """Hasler-Susstrunk colourfulness score; descriptive, not a perceptual-quality score."""
+    b,g,r=cv2.split(img.astype(np.float32))
+    rg=np.abs(r-g)
+    yb=np.abs(0.5*(r+g)-b)
+    return float(np.sqrt(rg.std()**2+yb.std()**2)+0.3*np.sqrt(rg.mean()**2+yb.mean()**2))
+
+def unpaired_metrics(inp,out):
+    """Metrics available when a real foggy photo has no aligned clear reference."""
+    q0,q1=C.quality_metrics(inp),C.quality_metrics(out)
+    vis=C.visibility_metrics(inp,out)
+    gray=cv2.cvtColor(out,cv2.COLOR_RGB2GRAY)
+    clipped=float(np.mean((gray<=1)|(gray>=254)))
+    return {
+        "visible_edge_gain_e":vis["e"], "gradient_ratio_r":vis["r"],
+        "newly_clipped_share":vis["sigma"], "contrast_before":q0["contrast"],
+        "contrast_after":q1["contrast"], "entropy_before":q0["entropy"],
+        "entropy_after":q1["entropy"], "gradient_before":q0["gradient"],
+        "gradient_after":q1["gradient"], "edge_pixels_before_pct":q0["edges"],
+        "edge_pixels_after_pct":q1["edges"],
+        "colorfulness_before":colorfulness_metric(inp),
+        "colorfulness_after":colorfulness_metric(out),
+        "output_clipped_pixel_pct":100.0*clipped,
+    }
+
+def contact_sheet(rows, path, tile_width=300):
+    """Create a labelled multi-row contact sheet from (image, label) pairs."""
+    tiles=[]
+    for img,label in rows:
+        h,w=img.shape[:2]
+        scale=min(1.0,tile_width/w,190/h)
+        resized=cv2.resize(img,(max(1,int(w*scale)),max(1,int(h*scale))),interpolation=cv2.INTER_AREA)
+        canvas=np.full((220,tile_width,3),245,np.uint8)
+        x=(tile_width-resized.shape[1])//2
+        y=26+(190-resized.shape[0])//2
+        canvas[y:y+resized.shape[0],x:x+resized.shape[1]]=resized
+        cv2.putText(canvas,label[:42],(7,18),cv2.FONT_HERSHEY_SIMPLEX,0.43,(20,20,20),1,cv2.LINE_AA)
+        tiles.append(canvas)
+    if not tiles:
+        return
+    cols=3
+    rows_n=(len(tiles)+cols-1)//cols
+    sheet=np.full((rows_n*220,cols*tile_width,3),255,np.uint8)
+    for i,tile in enumerate(tiles):
+        y=(i//cols)*220; x=(i%cols)*tile_width
+        sheet[y:y+220,x:x+tile_width]=tile
+    cv2.imwrite(str(path),cv2.cvtColor(sheet,cv2.COLOR_RGB2BGR))
+
+def evaluate_unpaired_real_world(max_dim=800):
+    """Evaluate real urban fog photos without inventing unavailable reference scores."""
+    images=load_unpaired_real_fog(max_dim)
+    if not images:
+        print(f"No readable real-fog images found in {URBAN_REAL_FOGGY}")
+        return
+    OUT.mkdir(parents=True,exist_ok=True); (OUT/"figures").mkdir(parents=True,exist_ok=True)
+    methods={
+        "Fog removal only (DCP)":dict(C.P_BALANCED,hist=0,freq=0,smooth=0,sharpen=0,clahe=0,
+            balance=0,restore=0,gamma=1.0,sat=1.0,far=0,deblur=0.0),
+        "Traffic monitoring":C.P_TRAFFIC,
+        "Balanced (haze-adaptive)":lambda im:C.auto_strength_params(im,C.P_BALANCED)[0],
+        "Course modules only":C.P_MODULES,
+    }
+    records=[]; sheets=[]; human=[]
+    for name,inp in images.items():
+        sheets.append((inp,f"{name} | original"))
+        human.append({"image":name,"capture_date":"","capture_time":"","location_or_source":"",
+            "weather_or_haze_description":"","lighting":"","scene_type":"",
+            "visibility_score_1_5":"","artifact_score_1_5":"","color_naturalness_1_5":"","reviewer_notes":""})
+        for method,settings in methods.items():
+            start=time.perf_counter()
+            P=settings(inp) if callable(settings) else settings
+            out=C.dehaze_pipeline(inp,P)
+            elapsed=time.perf_counter()-start
+            metrics=unpaired_metrics(inp,out)
+            records.append({"image":name,"method":method,"processing_seconds":elapsed,**metrics})
+            if method=="Balanced (haze-adaptive)":
+                sheets.append((out,f"{name} | balanced"))
+    write_csv(OUT/"real_world_unpaired.csv",records)
+    write_csv(OUT/"human_review_template.csv",human)
+    contact_sheet(sheets,OUT/"figures"/"real_world_unpaired_contact_sheet.jpg",tile_width=300)
+    report=["# Real-world urban fog validation (unpaired images)","",
+        f"Images processed: **{len(images)}** from `{URBAN_REAL_FOGGY.relative_to(ROOT)}`. Maximum long edge: {max_dim}px.","",
+        "These are real fog/smog photographs without aligned clear references. Therefore PSNR, SSIM, reference edge-F1, and true object-detection recall are deliberately not reported for this set.","",
+        "## Mean no-reference indicators by method","",
+        "| Method | Visible-edge gain e | Gradient ratio r | Newly clipped share | Contrast change | Entropy change | Processing (s/image) |",
+        "|---|---:|---:|---:|---:|---:|---:|"]
+    for method in methods:
+        sel=[r for r in records if r["method"]==method]
+        mean=lambda key:float(np.nanmean([r[key] for r in sel]))
+        report.append(f"| {method} | {mean('visible_edge_gain_e'):+.3f} | {mean('gradient_ratio_r'):.3f} | {100*mean('newly_clipped_share'):.2f}% | {mean('contrast_after')-mean('contrast_before'):+.2f} | {mean('entropy_after')-mean('entropy_before'):+.3f} | {mean('processing_seconds'):.3f} |")
+    report += ["", "## Interpretation and limitations", "",
+        "- Visible-edge gain and gradient ratio measure contrast/edge changes, not recovery of the true scene. Sharpening and noise can increase them.",
+        "- Entropy, contrast, and colourfulness are descriptive statistics; higher values are not automatically better.",
+        "- Newly clipped share is a warning indicator for lost shadow/highlight detail.",
+        "- The human-review template is intentionally blank. Complete it after independent visual review; do not treat generated scores as human ratings.",
+        "- For stronger field validation, collect repeated daytime/nighttime samples across light, moderate, and dense fog; record capture conditions and source/licence; preserve original files; and obtain aligned clear references where feasible.",
+        "- For traffic claims, annotate vehicles/pedestrians and calculate precision, recall, and mAP against those annotations. Detector agreement with another model is not ground truth.","",
+        "## Output files", "",
+        "- `real_world_unpaired.csv`: per-image, per-method metrics and runtime.",
+        "- `human_review_template.csv`: blank reviewer metadata and scoring sheet.",
+        "- `figures/real_world_unpaired_contact_sheet.jpg`: originals alongside haze-adaptive outputs.",
+        ""]
+    (OUT/"real_world_validation.md").write_text("\n".join(report),encoding="utf-8")
+    print("\n".join(report))
+    print(f"\nSaved real-world validation outputs to {OUT}")
+
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--max-dim",type=int,default=800,help="downscale test photos to this long edge")
     ap.add_argument("--export-urban",action="store_true",help="(re)write the synthetic city test set to assets/")
     ap.add_argument("--charts",action="store_true",help="only (re)write the SVG charts in results/figures")
     ap.add_argument("--fit-strength",action="store_true",help="re-run the fit of the haze-adaptive strength rule")
+    ap.add_argument("--real-world-only",action="store_true",help="evaluate the bundled unpaired real urban fog photos and exit")
     args=ap.parse_args()
     (OUT/"figures").mkdir(parents=True,exist_ok=True)
+    if args.real_world_only:
+        evaluate_unpaired_real_world(args.max_dim)
+        return
     if args.export_urban:
         export_urban()
     pairs=load_pairs(args.max_dim)
@@ -593,7 +727,7 @@ def main():
     # Experiment 5: fog-density sweep, fixed default against strength set from the haze level
     datasets={"7 garden photos":{n:(c,None) for n,(_,c) in pairs.items()},"synthetic streets":dict(urban)}
     if streets:
-        datasets["9 real streets"]={n:(c,None) for n,c in streets.items()}
+        datasets[f"{len(streets)} real streets"]={n:(c,None) for n,c in streets.items()}
     sweep_rows,sweep_md=sweep_table(datasets)
     write_csv(OUT/"strength_sweep.csv",sweep_rows)
     md+=["## 5. Fog density sweep: fixed default against strength set from the haze level","",

@@ -182,9 +182,23 @@ def far_detail(img,t,strength):
     # Depth weight: 0 where the air is clear (t=1), rising to 1 in dense haze (t<=0.2), times the noise gate
     w=np.clip((1.0-t)/0.8,0.0,1.0)**1.5*gate
     return _from_ycc(ycc,y+(strength/100.0)*2.0*w*detail)
-# Inverts the scattering model: J = (I - A) / t + A
-def recover_scene(img,t,A):
-    J=(img.astype(np.float32)/255.0-A)/t[:,:,None]+A
+# Inverts the scattering model: J = (I - A) / t + A. A soft safeguard
+# blends back some input in bright, nearly-achromatic regions where DCP's
+# dark-pixel assumption is unreliable (e.g. white facades and headlights).
+def recover_scene(img,t,A,protect_bright=True):
+    I=img.astype(np.float32)/255.0
+    J=(I-A)/np.maximum(t[:,:,None],1e-3)+A
+    if protect_bright:
+        hsv=cv2.cvtColor(img,cv2.COLOR_RGB2HSV).astype(np.float32)
+        luminance=cv2.cvtColor(img,cv2.COLOR_RGB2GRAY).astype(np.float32)/255.0
+        saturation=hsv[:,:,1]/255.0
+        # Smooth masks avoid visible hard boundaries. This is a conservative
+        # prior, not semantic white-building detection; bright haze may remain.
+        bright=np.clip((luminance-0.72)/0.22,0.0,1.0)
+        bright=bright*bright*(3.0-2.0*bright)  # smoothstep
+        neutral=np.clip((0.24-saturation)/0.18,0.0,1.0)
+        protection=(0.60*bright*neutral)[:,:,None]
+        J=J*(1.0-protection)+I*protection
     return np.clip(J*255.0+0.5,0,255).astype(np.uint8)
 _DCP_CACHE=OrderedDict()
 # dark_channel_prior behind a small LRU cache, since it is the slow stage

@@ -1,4 +1,4 @@
-# Vehicle and pedestrian detection for the downstream test (evaluation only): YOLOv5n (COCO, ONNX) run with onnxruntime
+# Vehicle and pedestrian detection (Applications views and the downstream test): YOLOv5n (COCO, ONNX) run with onnxruntime
 import urllib.request
 from pathlib import Path
 import cv2
@@ -41,21 +41,30 @@ def detect(img,conf=0.25,iou=0.45,classes=None):
         x=x.astype(np.float16)
     out=sess.run(None,{sess.get_inputs()[0].name:x})[0][0].astype(np.float32) # (25200, 85)
     keep=classes or CLASSES
-    # Class score = objectness * class probability
+    # Class score = objectness * class probability, checked for every wanted class on its own, so a motorcycle whose best
+    # of the 80 COCO classes is something else is still found
     scores=out[:,4:5]*out[:,5:]
-    cls=scores.argmax(1)
-    best=scores[np.arange(len(out)),cls]
-    sel=(best>=conf)&np.isin(cls,list(keep))
-    if not sel.any():
-        return []
-    b,sc,cl=out[sel,:4],best[sel],cls[sel]
-    # Centre/size boxes to corner boxes in original image coordinates
-    xyxy=np.stack([(b[:,0]-b[:,2]/2-left)/s,(b[:,1]-b[:,3]/2-top)/s,
-            (b[:,0]+b[:,2]/2-left)/s,(b[:,1]+b[:,3]/2-top)/s],1)
-    wh=[[float(r[0]),float(r[1]),float(r[2]-r[0]),float(r[3]-r[1])] for r in xyxy]
-    # Non-maximum suppression: drop boxes that overlap a better box by more than the IoU threshold
-    idx=cv2.dnn.NMSBoxes(wh,sc.tolist(),conf,iou)
-    return [(*np.clip(xyxy[i],0,[w,h,w,h]).tolist(),float(sc[i]),keep[int(cl[i])]) for i in np.array(idx).ravel()]
+    found=[]
+    for c,name in keep.items():
+        sel=scores[:,c]>=conf
+        if not sel.any():
+            continue
+        b,sc=out[sel,:4],scores[sel,c]
+        # Centre/size boxes to corner boxes in original image coordinates
+        xyxy=np.stack([(b[:,0]-b[:,2]/2-left)/s,(b[:,1]-b[:,3]/2-top)/s,
+                (b[:,0]+b[:,2]/2-left)/s,(b[:,1]+b[:,3]/2-top)/s],1)
+        found+=[(*np.clip(r,0,[w,h,w,h]).tolist(),float(v),name) for r,v in zip(xyxy,sc)]
+    return _group_nms(found,conf,iou)
+# Non-maximum suppression within groups of look-alike classes (car/bus/truck, bicycle/motorcycle, person): one object gets one box,
+# but a rider and the motorcycle under them, which overlap strongly, are kept as two objects
+GROUPS={"car":0,"bus":0,"truck":0,"bicycle":1,"motorcycle":1}
+def _group_nms(found,conf,iou):
+    out=[]
+    for g in {GROUPS.get(b[5],hash(b[5])) for b in found}:
+        group=[b for b in found if GROUPS.get(b[5],hash(b[5]))==g]
+        wh=[[b[0],b[1],b[2]-b[0],b[3]-b[1]] for b in group]
+        out+=[group[i] for i in np.array(cv2.dnn.NMSBoxes(wh,[b[4] for b in group],conf,iou)).ravel()]
+    return out
 # Tiled detection: the full frame plus overlapping tiles of about 560 px, so small far-away vehicles and motorcycles are seen at a higher resolution; merged with NMS
 def detect_tiled(img,conf=0.25,iou=0.45,classes=None,tile=560,overlap=0.3):
     h,w=img.shape[:2]
@@ -72,10 +81,7 @@ def detect_tiled(img,conf=0.25,iou=0.45,classes=None,tile=560,overlap=0.3):
                     found.append((b[0]+x0,b[1]+y0,b[2]+x0,b[3]+y0,b[4],b[5]))
     if len(found)<2:
         return found
-    wh=[[b[0],b[1],b[2]-b[0],b[3]-b[1]] for b in found]
-    # Non-maximum suppression over the union of all passes
-    keep=np.array(cv2.dnn.NMSBoxes(wh,[b[4] for b in found],conf,iou)).ravel()
-    return [found[i] for i in keep]
+    return _group_nms(found,conf,iou) # non-maximum suppression over the union of all passes
 # Intersection over union of two boxes
 def _iou(a,b):
     ix=max(0.0,min(a[2],b[2])-max(a[0],b[0]))

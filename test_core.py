@@ -5,7 +5,7 @@ import dehaze_core as C
 from evaluate import load_pairs,load_urban
 rng=np.random.RandomState(0)
 img=rng.randint(0,256,(97,131,3),dtype=np.uint8) # odd sizes on purpose
-OFF=dict(C.P_BALANCED,use_dcp=False,hist=0,freq=0,smooth=0,sharpen=0,balance=0)
+OFF=dict(C.P_BALANCED,use_dcp=False,hist=0,freq=0,smooth=0,sharpen=0,clahe=0,balance=0,restore=0,gamma=1.0,sat=1.0,far=0,deblur=0.0)
 # 1. every stage leaves the image untouched when switched off
 for name in C.STAGE_ORDER:
     assert not C.stage_active(name,OFF),name
@@ -28,7 +28,12 @@ none_p=[C.psnr(h,c) for h,c in pairs.values()]
 full_s=[C.ssim(C.dehaze_pipeline(h,C.P_BALANCED),c) for h,c in pairs.values()]
 full_p=[C.psnr(C.dehaze_pipeline(h,C.P_BALANCED),c) for h,c in pairs.values()]
 assert np.mean(full_s)>np.mean(none_s) and np.mean(full_p)>np.mean(none_p)
-# 5. the metrics themselves
+# 5. bright neutral regions receive a conservative DCP safeguard; output stays valid
+white_patch=np.full((40,40,3),230,np.uint8)
+protected=C.recover_scene(white_patch,np.full((40,40),0.25,np.float32),np.array([0.90,0.90,0.90],np.float32))
+assert protected.mean()>=white_patch.mean()-1.0
+assert protected.dtype==np.uint8 and protected.shape==white_patch.shape
+# 6. the metrics themselves
 assert abs(C.ssim(img,img)-1.0)<1e-6 and C.psnr(img,img)==99.0
 assert cv2.cvtColor(img,cv2.COLOR_RGB2GRAY).shape==img.shape[:2]
 # 6. blur estimation: sharp photos read as sharp (also in fog); known blur is found, with its type, within 30 %
@@ -111,5 +116,8 @@ with tempfile.TemporaryDirectory() as td:
     w.release()
     n_fr,_=process_video(src,dst,max_frames=6,auto=True,auto_blur=True)
     cap=cv2.VideoCapture(str(dst))
-    assert n_fr==6 and int(cap.get(cv2.CAP_PROP_FRAME_COUNT))==6 and int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))==320
+    try:
+        assert n_fr==6 and int(cap.get(cv2.CAP_PROP_FRAME_COUNT))==6 and int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))==320
+    finally:
+        cap.release()  # Windows locks the MP4 until the capture handle is explicitly closed
 print("all checks passed")

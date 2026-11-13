@@ -154,6 +154,12 @@ def run_pipeline(img,P):
     t=time.perf_counter()
     out=dehaze_pipeline(img,P)
     return out,time.perf_counter()-t
+# Three download buttons for an annotated pair: dehazed, original, and both side by side
+def download_pair(a,b,tag,key):
+    c1,c2,c3=st.columns(3)
+    c1.download_button("Download dehazed",data=to_png_bytes(b),file_name=f"{tag}_dehazed.png",mime="image/png",key=f"dl_{tag}_b_{key}",width="stretch")
+    c2.download_button("Download original",data=to_png_bytes(a),file_name=f"{tag}_original.png",mime="image/png",key=f"dl_{tag}_a_{key}",width="stretch")
+    c3.download_button("Download side by side",data=to_png_bytes(np.hstack([a,b])),file_name=f"{tag}_side_by_side.png",mime="image/png",key=f"dl_{tag}_ab_{key}",width="stretch")
 # Applications panel: traffic detection (YOLOv5n) and construction-inspection edge and line overlays, original against dehazed; returns the detector settings
 def render_applications(a,b,key):
     t_traffic,t_build=st.tabs(["Traffic monitoring","Construction inspection"])
@@ -161,21 +167,24 @@ def render_applications(a,b,key):
         sens=st.slider("Detection confidence",0.10,0.60,0.20,0.05,key=f"det_conf_{key}",
             help="Lower finds more (and fainter) vehicles, but also more false ones")
         tiled=st.toggle("Search tiles for small and distant vehicles",value=True,key=f"det_tiled_{key}")
-        st.caption("Also runs the detector on overlapping zoomed-in tiles, which finds motorcycles and cars far away in the fog.")
         try:
             d_in,d_out=detect_vehicles(a,sens,tiled),detect_vehicles(b,sens,tiled)
+            box_a,box_b=draw_boxes(a,d_in),draw_boxes(b,d_out)
             col_b,col_a=st.columns(2)
-            col_b.image(draw_boxes(a,d_in),width="stretch",caption=f"Original: {len(d_in)} vehicles and people detected")
-            col_a.image(draw_boxes(b,d_out),width="stretch",caption=f"Dehazed: {len(d_out)} vehicles and people detected")
+            col_b.image(box_a,width="stretch",caption=f"Original: {len(d_in)} vehicles and people detected")
+            col_a.image(box_b,width="stretch",caption=f"Dehazed: {len(d_out)} vehicles and people detected")
+            download_pair(box_a,box_b,"detection",key)
         except Exception as exc:
             st.caption(f"Detection model not available here ({type(exc).__name__}); see detect.py to download yolov5n.onnx.")
     with t_build:
         e_in,e_out=downstream(a),downstream(b)
+        ov_a,ov_b=edge_overlay(a),edge_overlay(b)
         col_b,col_a=st.columns(2)
-        col_b.image(edge_overlay(a),width="stretch",
+        col_b.image(ov_a,width="stretch",
             caption=f"Original: edges {e_in['canny_pct']:.1f}% of pixels, {e_in['lines']} lines ({e_in['lines_vertical']} vertical)")
-        col_a.image(edge_overlay(b),width="stretch",
+        col_a.image(ov_b,width="stretch",
             caption=f"Dehazed: edges {e_out['canny_pct']:.1f}% of pixels, {e_out['lines']} lines ({e_out['lines_vertical']} vertical)")
+        download_pair(ov_a,ov_b,"edges_lines",key)
     return sens,tiled
 # Graphs for an original and a dehazed image: brightness and colour histograms, gamma curves, FFT spectra and the mean spectrum by frequency
 def render_graphs(a,b):
@@ -444,7 +453,10 @@ def inject_css():
 .st-key-upload_card{max-width:100%;}
 .st-key-preview_images [data-testid="stImage"] img{max-width:100%;}
 [data-testid="stMainBlockContainer"]{padding:0 2rem 1.2rem 2rem;max-width:112rem;margin-left:auto;margin-right:auto;}
-[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"]{gap:0;}
+.st-key-evaluation_shell{width:100%!important;max-width:100%!important;margin:0!important;box-sizing:border-box!important;}
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"]{gap:1.15rem!important;}
+.st-key-batch_card,.st-key-video_card,.st-key-method_card,.st-key-evaluation_shell{width:100%!important;box-sizing:border-box!important;}
+[data-testid="stHorizontalBlock"]{column-gap:1.15rem!important;}
 [data-testid="stAppViewContainer"] .ufc-title,[data-testid="stAppViewContainer"] .pipeline-heading,[data-testid="stAppViewContainer"] .card-heading{font-family:'Big Shoulders Display',sans-serif;}
 [data-testid="stAppViewContainer"] .stage-num,[data-testid="stAppViewContainer"] .stage-value{font-family:'IBM Plex Mono',monospace;}
 .ufc-title{font-weight:800;font-size:2.3rem;line-height:1;text-transform:uppercase;letter-spacing:.03em;color:#111;margin:.725rem 0;}
@@ -1227,10 +1239,10 @@ with lower_col:
         )
         m_l.markdown(
             "Blur is undone with Wiener deconvolution in the Fourier domain, for a Gaussian or linear "
-            "motion blur (at any angle) whose size you set, or that the app measures from the width of the strongest "
+            "motion blur (at any angle), with a configurable size or automatic estimation from the width of the strongest "
             "edges along eight directions (*Detect the blur automatically*). *Course modules only* runs just the three project modules: "
             "frequency-domain enhancement, histogram stretching, and adaptive smoothing and sharpening. "
-            "The Edges view shows the Sobel gradient of both images on one scale, so you can see how much "
+            "The Edges view shows the Sobel gradient of both images on one scale, highlighting how much "
             "more of the buildings and roads shows up."
         )
         m_l.markdown(
@@ -1254,3 +1266,164 @@ with lower_col:
             "7. Wang, Z. et al. (2004). Image quality assessment: from error visibility to structural similarity. "
             "*IEEE TIP*, 13(4), 600–612."
         )
+
+
+# -----------------------------------------------------------------------------
+# WEB WORKSPACE: evaluation and diagnostics (no separate terminal commands)
+# -----------------------------------------------------------------------------
+_, evaluation_col, _ = st.columns(PAGE_SPLIT, gap="large")
+with evaluation_col:
+    with st.container(key="evaluation_shell"):
+        with st.expander("Evaluation & Project Health · optional project tools", expanded=False):
+            st.caption(
+                "Use these tools for project-report evidence or installation checks. "
+                "After the app is running, evaluation and checks happen here—no separate scripts or terminal commands are needed.")
+            with st.expander("1. Real-world fog validation", expanded=False):
+                st.caption(
+                    "Uses the bundled real fog/smog set plus uploaded field photographs. "
+                    "Because these images have no aligned clear references, the app reports "
+                    "no-reference indicators and runtime—not PSNR/SSIM or ground-truth detection accuracy.")
+                field_files = st.file_uploader(
+                    "Upload real foggy urban photos (optional)",
+                    type=["jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"],
+                    accept_multiple_files=True, key="web_validation_uploads")
+                eval_dim = st.select_slider("Maximum image long edge", options=[480, 640, 800, 1000, 1200], value=800,
+                                            key="web_eval_dim")
+                run_eval = st.button("Run real-world evaluation", type="primary", key="web_run_eval")
+                if run_eval:
+                    try:
+                        import csv
+                        import evaluate as E
+                        from dehaze_core import P_BALANCED as _PB, P_MODULES as _PM, P_TRAFFIC as _PT
+                        with st.spinner("Evaluating real fog images with four processing methods…"):
+                            images = E.load_unpaired_real_fog(int(eval_dim))
+                            for uploaded in (field_files or []):
+                                try:
+                                    arr = load_photo(uploaded)
+                                    images[f"Uploaded: {uploaded.name}"] = resize_max(arr, int(eval_dim))
+                                except Exception as exc:
+                                    st.warning(f"Could not read {uploaded.name}: {type(exc).__name__}: {exc}")
+                            if not images:
+                                st.error("No readable real-fog images were found. Add photos above or check the bundled test-image folder.")
+                            else:
+                                methods = {
+                                    "Fog removal only (DCP)": dict(_PB, hist=0, freq=0, smooth=0, sharpen=0, clahe=0,
+                                        balance=0, restore=0, gamma=1.0, sat=1.0, far=0, deblur=0.0),
+                                    "Traffic monitoring": _PT,
+                                    "Balanced (haze-adaptive)": lambda im: __import__('dehaze_core').auto_strength_params(im, _PB)[0],
+                                    "Course modules only": _PM,
+                                }
+                                rows, sheet = [], []
+                                for image_name, source in images.items():
+                                    sheet.append((source, f"{image_name} | original"))
+                                    for method_name, setting in methods.items():
+                                        started = time.perf_counter()
+                                        params = setting(source) if callable(setting) else setting
+                                        restored = dehaze_pipeline(source, params)
+                                        elapsed = time.perf_counter() - started
+                                        m = E.unpaired_metrics(source, restored)
+                                        rows.append({"image": image_name, "method": method_name,
+                                                     "processing_seconds": round(elapsed, 5), **m})
+                                        if method_name == "Balanced (haze-adaptive)":
+                                            sheet.append((restored, f"{image_name} | balanced"))
+                                out_dir = APP_DIR / "results"
+                                fig_dir = out_dir / "figures"
+                                fig_dir.mkdir(parents=True, exist_ok=True)
+                                E.write_csv(out_dir / "web_real_world_unpaired.csv", rows)
+                                E.contact_sheet(sheet, fig_dir / "web_real_world_contact_sheet.jpg", tile_width=300)
+                                review_rows = [{"image": name, "capture_date": "", "capture_time": "",
+                                    "location_or_source": "", "weather_or_haze_description": "", "lighting": "",
+                                    "scene_type": "", "visibility_score_1_5": "", "artifact_score_1_5": "",
+                                    "color_naturalness_1_5": "", "reviewer_notes": ""} for name in images]
+                                E.write_csv(out_dir / "web_human_review_template.csv", review_rows)
+                                st.session_state.web_eval_rows = rows
+                                st.session_state.web_eval_images = len(images)
+                                st.session_state.web_eval_csv = (out_dir / "web_real_world_unpaired.csv").read_bytes()
+                                st.session_state.web_eval_review = (out_dir / "web_human_review_template.csv").read_bytes()
+                                st.session_state.web_eval_sheet = (fig_dir / "web_real_world_contact_sheet.jpg").read_bytes()
+                                st.success(f"Completed: {len(images)} images × {len(methods)} methods = {len(rows)} evaluations.")
+                    except Exception as exc:
+                        st.error(f"Evaluation failed: {type(exc).__name__}: {exc}")
+                if st.session_state.get("web_eval_rows"):
+                    import pandas as pd
+                    rows = st.session_state.web_eval_rows
+                    st.subheader("Per-image evaluation results")
+                    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+                    df = pd.DataFrame(rows)
+                    numeric = [c for c in df.columns if c not in ("image", "method")]
+                    summary = df.groupby("method", as_index=False)[numeric].mean(numeric_only=True)
+                    st.subheader("Average results by method")
+                    st.dataframe(summary, width="stretch", hide_index=True)
+                    c1, c2, c3 = st.columns(3)
+                    c1.download_button("Download metrics CSV", st.session_state.web_eval_csv,
+                                       "real_world_metrics.csv", "text/csv", key="web_dl_metrics")
+                    c2.download_button("Download human-review sheet", st.session_state.web_eval_review,
+                                       "human_review_template.csv", "text/csv", key="web_dl_review")
+                    c3.download_button("Download comparison sheet", st.session_state.web_eval_sheet,
+                                       "real_world_contact_sheet.jpg", "image/jpeg", key="web_dl_sheet")
+                    st.info("Interpret edge gain, gradient ratio, contrast and entropy as visibility indicators—not proof that the original scene was perfectly reconstructed. Complete the human-review sheet with independent reviewers.")
+            with st.expander("2. Run built-in system checks", expanded=False):
+                st.caption("These checks run inside the Streamlit app. Each result includes the test performed and the observed output. No temporary video files or separate test commands are required.")
+                if st.button("Run system checks", key="web_run_checks"):
+                    checks = []
+                    def _check(label, fn):
+                        try:
+                            detail = fn()
+                            checks.append({"Check": label, "Result": "PASS",
+                                           "Details": str(detail) if detail else "Test completed successfully; all assertions passed."})
+                        except Exception as exc:
+                            checks.append({"Check": label, "Result": "FAIL",
+                                           "Details": f"{type(exc).__name__}: {exc}"})
+                    rng = np.random.default_rng(7)
+                    sample = rng.integers(0, 256, (96, 128, 3), dtype=np.uint8)
+                    def _imports():
+                        import dehaze_core as core
+                        return f"Imported dehaze_core successfully; {len(core.STAGE_ORDER)} processing stages are registered: {', '.join(core.STAGE_ORDER)}."
+                    def _shape_dtype():
+                        result = dehaze_pipeline(sample, P_BALANCED)
+                        assert result.shape == sample.shape, f"Expected shape {sample.shape}, got {result.shape}."
+                        assert result.dtype == np.uint8, f"Expected uint8 output, got {result.dtype}."
+                        assert np.isfinite(result).all(), "Output contains NaN or infinite values."
+                        return f"Input/output shape: {sample.shape}; output dtype: {result.dtype}; pixel range: {int(result.min())}–{int(result.max())}; no non-finite values."
+                    def _disabled_stages():
+                        params = dict(P_BALANCED, use_dcp=False, hist=0, freq=0, smooth=0, sharpen=0,
+                                      clahe=0, balance=0, restore=0, gamma=1.0, sat=1.0, far=0, deblur=0.0)
+                        changed = [stage for stage in STAGE_ORDER if not np.array_equal(apply_stage(stage, sample, params), sample)]
+                        assert not changed, f"Disabled stages unexpectedly changed pixels: {changed}."
+                        return f"All {len(STAGE_ORDER)} pipeline stages preserved every pixel when disabled; output is identical to input."
+                    def _identity_metrics():
+                        score, peak = ssim(sample, sample), psnr(sample, sample)
+                        assert abs(score-1.0) <= 1e-6, f"Expected SSIM 1.0, got {score:.8f}."
+                        assert peak == 99.0, f"Expected the app's identical-image PSNR sentinel 99.0, got {peak}."
+                        return f"Identical-image reference test: SSIM = {score:.6f}; PSNR sentinel = {peak:.1f} dB."
+                    def _bright_safeguard():
+                        white = np.full((32, 32, 3), 230, np.uint8)
+                        recovered = __import__('dehaze_core').recover_scene(white, np.full((32,32), .25, np.float32),
+                            np.array([.9,.9,.9], np.float32))
+                        before, after = float(white.mean()), float(recovered.mean())
+                        assert after >= before-1, f"Bright-region mean fell from {before:.1f} to {after:.1f}."
+                        return f"Bright-region safeguard preserved a test patch: mean intensity {before:.1f} → {after:.1f} (allowed drop: at most 1 level)."
+                    def _dataset_readable():
+                        count = len(__import__('evaluate').load_unpaired_real_fog(320))
+                        assert count >= 15, f"Expected at least 15 bundled images; found {count}."
+                        return f"Loaded {count} bundled real-fog/smog photographs at a 320 px maximum long edge."
+                    _check("Core processing imports", _imports)
+                    _check("Pipeline preserves image shape and dtype", _shape_dtype)
+                    _check("Disabled stages preserve original pixels", _disabled_stages)
+                    _check("Identity SSIM and PSNR", _identity_metrics)
+                    _check("Bright-region DCP safeguard", _bright_safeguard)
+                    _check("Bundled real-fog dataset readable", _dataset_readable)
+                    st.session_state.web_check_rows = checks
+                if st.session_state.get("web_check_rows"):
+                    import pandas as pd
+                    checks_df = pd.DataFrame(st.session_state.web_check_rows)
+                    st.dataframe(checks_df, width="stretch", hide_index=True,
+                                 column_config={"Details": st.column_config.TextColumn("What was tested / observed", width="large")})
+                    passed = sum(x["Result"] == "PASS" for x in st.session_state.web_check_rows)
+                    total = len(st.session_state.web_check_rows)
+                    if passed == total:
+                        st.success(f"All {total} system checks passed. Expand the Details column to see the evidence for each check.")
+                    else:
+                        st.warning(f"{passed}/{total} checks passed. The Details column explains each failure.")
+            st.caption("Tip: Optional during normal image processing. Open this section for project-report evidence or installation checks.")
+
