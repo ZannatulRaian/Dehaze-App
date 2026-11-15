@@ -18,7 +18,7 @@ from dehaze_core import ( # the image-processing code lives in dehaze_core.py
     downstream_metrics,edge_maps,estimate_blur as _estimate_blur,haze_level as _haze_level,strength_scale,make_sample_scene,psnr,quality_metrics,simulate_blur as _simulate_blur,
     simulate_fog as _simulate_fog,ssim,stage_active,transmission_map_image,visibility_metrics,
 )
-# Optional pillow-heif adds iPhone HEIC/HEIF support (pip install pillow-heif); the app works without it
+# Optional pillow-heif adds iPhone HEIC/HEIF- High Efficiency Image File support (pip install pillow-heif); the app works without it, Python's Pillow library (PIL) supports common image formats
 try:
     from pillow_heif import register_heif_opener
     register_heif_opener()
@@ -160,8 +160,46 @@ def download_pair(a,b,tag,key):
     c1.download_button("Download dehazed",data=to_png_bytes(b),file_name=f"{tag}_dehazed.png",mime="image/png",key=f"dl_{tag}_b_{key}",width="stretch")
     c2.download_button("Download original",data=to_png_bytes(a),file_name=f"{tag}_original.png",mime="image/png",key=f"dl_{tag}_a_{key}",width="stretch")
     c3.download_button("Download side by side",data=to_png_bytes(np.hstack([a,b])),file_name=f"{tag}_side_by_side.png",mime="image/png",key=f"dl_{tag}_ab_{key}",width="stretch")
+# Compact PSNR and SSIM line (original -> dehazed, against the clear photo) with a small expander for definitions and the reference upload
+def metrics_strip(a,b,ref,key):
+    ok=ref is not None and ref.shape==a.shape
+    if ok:
+        p0,p1,s0,s1=psnr(a,ref),psnr(b,ref),ssim(a,ref),ssim(b,ref)
+        col=lambda d:"#2e7d32" if d>=0 else "#c62828"
+        st.markdown(
+            '<p class="ufc-cap" style="margin:0 0 .2rem">'
+            '<abbr title="Peak Signal-to-Noise Ratio" style="text-decoration:none">PSNR</abbr> '
+            f'{p0:.1f} &rarr; <b>{p1:.1f} dB</b> <span style="color:{col(p1-p0)}">({p1-p0:+.1f})</span>'
+            ' &nbsp;&middot;&nbsp; '
+            '<abbr title="Structural Similarity Index Measure" style="text-decoration:none">SSIM</abbr> '
+            f'{s0:.3f} &rarr; <b>{s1:.3f}</b> <span style="color:{col(s1-s0)}">({s1-s0:+.3f})</span>'
+            ' <span style="color:#888">vs. clear photo</span></p>',unsafe_allow_html=True)
+    with st.expander("PSNR · SSIM"+("" if ok else " (needs a clear reference)"),expanded=False):
+        st.caption("**PSNR (Peak Signal-to-Noise Ratio):** pixel error against the clear photo, 10·log10(255²/MSE) in dB; higher is closer. "
+            "**SSIM (Structural Similarity Index Measure):** local brightness, contrast and structure, 0 to 1; 1 is identical. "
+            "They measure fidelity to the clear photo, so judge them together with the picture.")
+        if not ok:
+            st.caption("Upload a clear photo of this scene (same viewpoint, no fog), or untick *Photo is already foggy* "
+                "in the Enhancement Pipeline to simulate fog on a clear photo.")
+            ref_file=st.file_uploader("Clear reference photo",type=["jpg","jpeg","png","webp","bmp","tif","tiff"],
+                key=f"metrics_ref_{st.session_state.source_key}_{key}",label_visibility="collapsed")
+            if ref_file is not None:
+                try:
+                    clear_photo=load_photo(ref_file)
+                except Exception as exc:
+                    st.error(unreadable_message(ref_file.name,exc))
+                else:
+                    if abs((clear_photo.shape[1]/clear_photo.shape[0])/(a.shape[1]/a.shape[0])-1)>0.05:
+                        st.error("This photo has a different shape from the foggy one, so the two cannot be aligned. "
+                            "Use a clear photo of the same scene, from the same viewpoint and cropped the same way.")
+                    else:
+                        st.session_state.reference=(st.session_state.source_key,
+                            cv2.resize(clear_photo,(a.shape[1],a.shape[0]),interpolation=cv2.INTER_AREA))
+                        st.rerun()
 # Applications panel: traffic detection (YOLOv5n) and construction-inspection edge and line overlays, original against dehazed; returns the detector settings
-def render_applications(a,b,key):
+def render_applications(a,b,key,ref=None,with_metrics=False):
+    if with_metrics:
+        metrics_strip(a,b,ref,key)
     t_traffic,t_build=st.tabs(["Traffic monitoring","Construction inspection"])
     with t_traffic:
         sens=st.slider("Detection confidence",0.10,0.60,0.20,0.05,key=f"det_conf_{key}",
@@ -809,7 +847,7 @@ with left_col:
                             cap+=f" · PSNR {psnr(im,ref_for_compare):.1f} dB · SSIM {ssim(im,ref_for_compare):.3f}"
                         cols[i%3].image(im,caption=cap,width="stretch")
                 elif view=="Applications":
-                    render_applications(hazy,result,"prev")
+                    render_applications(hazy,result,"prev",ref=ref_for_compare,with_metrics=True)
                 elif view=="Original":
                     st.image(hazy,caption="Original",width="stretch")
                 else:
