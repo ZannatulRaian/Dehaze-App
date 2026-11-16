@@ -942,19 +942,6 @@ with right_col:
             st.markdown(_stage_row("00","Input","photo as is" if foggy else f"β {st.session_state.fog_density:.2f}"),
                 unsafe_allow_html=True)
             st.checkbox("Photo is already foggy (skip the fog simulation)",key="pre_foggy")
-            st.markdown(_param_row("Simulated fog density",f"{st.session_state.fog_density:.2f}"),
-                unsafe_allow_html=True)
-            st.slider("Fog density",0.0,4.0,step=0.05,key="fog_density",
-                disabled=st.session_state.pre_foggy,label_visibility="collapsed")
-            blur_txt="off" if st.session_state.blur_amount==0 else f"{st.session_state.blur_amount:.1f}px"
-            st.markdown(_param_row("Simulated blur",blur_txt),unsafe_allow_html=True)
-            st.slider("Blur amount",0.0,10.0,step=0.5,key="blur_amount",
-                disabled=st.session_state.pre_foggy,label_visibility="collapsed")
-            st.selectbox("Blur type",["Gaussian","Motion"],key="blur_kind",disabled=st.session_state.pre_foggy)
-            if st.session_state.blur_kind=="Motion":
-                st.markdown(_param_row("Motion direction",f"{st.session_state.blur_angle:.0f}°"),unsafe_allow_html=True)
-                st.slider("Motion direction",0.0,179.0,step=5.0,key="blur_angle",
-                    disabled=st.session_state.pre_foggy,label_visibility="collapsed")
             st.toggle("Course modules only (skip dark channel, deblur and tone)",key="modules_only")
         # Stage 01: dark channel prior fog removal
         with st.container(key="stage_dcp"):
@@ -962,17 +949,6 @@ with right_col:
                     "On" if st.session_state.use_dcp and not st.session_state.modules_only else "Off"),
                 unsafe_allow_html=True)
             st.toggle("Remove fog before the other stages",key="use_dcp")
-            st.markdown(_param_row("Haze removed (ω)",f"{st.session_state.dcp_omega:.2f}"),unsafe_allow_html=True)
-            st.slider("Haze removed",0.50,1.00,step=0.01,key="dcp_omega",label_visibility="collapsed")
-            st.markdown(_param_row("Minimum transmission (t₀)",f"{st.session_state.dcp_t0:.2f}"),unsafe_allow_html=True)
-            st.slider("Minimum transmission",0.05,0.50,step=0.01,key="dcp_t0",label_visibility="collapsed")
-            patch=st.session_state.dcp_patch
-            st.markdown(_param_row("Patch size","auto" if patch==0 else f"{patch}px"),unsafe_allow_html=True)
-            st.slider("Patch size",0,61,step=1,key="dcp_patch",label_visibility="collapsed")
-            st.toggle("Adaptive airlight and t₀ (measured from the photo's haze)",key="dcp_adaptive")
-            # Distant detail: noise-gated local-contrast boost weighted by haze depth (1 - t)
-            st.markdown(_param_row("Distant detail",f"{st.session_state.dcp_far}"),unsafe_allow_html=True)
-            st.slider("Distant detail",0,100,key="dcp_far",label_visibility="collapsed")
         # Stage 02: Wiener deconvolution deblur
         with st.container(key="stage_deblur"):
             blur_est=auto_info.get("blur")
@@ -987,19 +963,7 @@ with right_col:
                 kind=blur_est["kind"]
                 st.caption("Detected: the photo looks sharp, nothing to undo." if kind=="none" else
                     f"Detected: {kind.lower()} blur of about {blur_est['amount']:.1f} px"
-                    +(f" at {blur_est['angle']:.0f}° (0° = horizontal)" if kind=="Motion" else "")+", undone below.")
-            st.markdown(_param_row("Blur to undo","off" if amt==0 else f"{amt:.1f}px"),unsafe_allow_html=True)
-            st.slider("Blur to undo",0.0,10.0,step=0.5,key="deblur_amount",label_visibility="collapsed",
-                disabled=auto_on)
-            st.selectbox("Assumed blur type",["Gaussian","Motion"],key="deblur_kind",disabled=auto_on)
-            if st.session_state.deblur_kind=="Motion" or (auto_on and blur_est["kind"]=="Motion"):
-                ang=blur_est["angle"] if auto_on and blur_est["kind"]=="Motion" else st.session_state.deblur_angle
-                st.markdown(_param_row("Motion direction",f"{ang:.0f}°"),unsafe_allow_html=True)
-                st.slider("Motion direction to undo",0.0,179.0,step=5.0,key="deblur_angle",
-                    label_visibility="collapsed",disabled=auto_on)
-            st.markdown(_param_row("Noise damping (K)",f"{st.session_state.deblur_k:.3f}"),unsafe_allow_html=True)
-            st.slider("Noise damping",0.001,0.100,step=0.001,format="%.3f",key="deblur_k",
-                label_visibility="collapsed")
+                    +(f" at {blur_est['angle']:.0f}° (0° = horizontal)" if kind=="Motion" else "")+", undone automatically.")
         # Stage 03: histogram stretching
         with st.container(key="stage_hist"):
             st.markdown(_stage_row("03","Histogram Stretch",st.session_state.hist_strength),unsafe_allow_html=True)
@@ -1009,16 +973,11 @@ with right_col:
             st.markdown(_stage_row("03b","CLAHE (local contrast)",st.session_state.clahe_strength),
                 unsafe_allow_html=True)
             st.slider("CLAHE clip strength",0,100,key="clahe_strength",label_visibility="collapsed")
-            st.markdown(_param_row("Tile grid",f"{st.session_state.clahe_tiles}×{st.session_state.clahe_tiles}"),
-                unsafe_allow_html=True)
-            st.slider("CLAHE tile grid",2,16,key="clahe_tiles",label_visibility="collapsed")
         # Stage 04: frequency-domain high-frequency emphasis (FFT)
         with st.container(key="stage_freq"):
             st.markdown(_stage_row("04","Frequency-Domain Filter",st.session_state.freq_strength),
                 unsafe_allow_html=True)
             freq_strength=st.slider("Frequency strength",0,100,key="freq_strength",label_visibility="collapsed")
-            st.markdown(_param_row("Cutoff radius",f"{st.session_state.freq_cutoff}px"),unsafe_allow_html=True)
-            st.slider("Cutoff radius",5,80,key="freq_cutoff",label_visibility="collapsed")
         # Stage 05: adaptive smoothing (bilateral filter)
         with st.container(key="stage_smooth"):
             st.markdown(_stage_row("05","Adaptive Smoothing",st.session_state.smooth_strength),
@@ -1032,15 +991,7 @@ with right_col:
                 label_visibility="collapsed")
         # Stage 07: final tone (colour restoration, gray-world balance, saturation, gamma)
         with st.container(key="stage_tone"):
-            st.markdown(_stage_row("07","Final Tone",""),unsafe_allow_html=True)
-            st.markdown(_param_row("Gamma",f"{st.session_state.tone_gamma:.2f}"),unsafe_allow_html=True)
-            st.slider("Gamma",0.60,1.60,step=0.05,key="tone_gamma",label_visibility="collapsed")
-            st.markdown(_param_row("Saturation",f"{st.session_state.tone_sat:.2f}"),unsafe_allow_html=True)
-            st.slider("Saturation",0.50,2.00,step=0.05,key="tone_sat",label_visibility="collapsed")
-            st.markdown(_param_row("Colour balance",f"{st.session_state.tone_balance}"),unsafe_allow_html=True)
-            st.slider("Colour balance",0,100,key="tone_balance",label_visibility="collapsed")
-            st.markdown(_param_row("Colour restoration",f"{st.session_state.tone_restore}"),unsafe_allow_html=True)
-            st.slider("Colour restoration",0,100,key="tone_restore",label_visibility="collapsed")
+            st.markdown(_stage_row("07","Final Tone","Off" if st.session_state.modules_only else "On"),unsafe_allow_html=True)
         with st.container(key="pipeline_actions"):
             st.selectbox("Preset",list(PRESETS),key="preset_choice",on_change=_apply_preset)
             st.toggle("Set the strength from the haze level",key="strength_auto")

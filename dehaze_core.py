@@ -69,7 +69,7 @@ def noise_sigma(y):
 def _sharpen_parts(y):
     # Unsharp-mask detail = y - Gaussian blur (sigma 1.5), clipped to +-40 to avoid halos
     detail=np.clip(y-cv2.GaussianBlur(y,(0,0),1.5),-40.0,40.0)
-    # Sobel gradient magnitude smoothed by a Gaussian = local activity map
+    # Sobel gradient magnitude smoothed (edge detected) by a Gaussian = local activity map
     gx,gy=cv2.Sobel(y,cv2.CV_32F,1,0,ksize=3),cv2.Sobel(y,cv2.CV_32F,0,1,ksize=3)
     activity=cv2.GaussianBlur(np.hypot(gx,gy),(0,0),2.0)
     sigma=noise_sigma(y)

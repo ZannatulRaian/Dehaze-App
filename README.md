@@ -66,7 +66,7 @@ The **Course modules only** switch runs just the three project modules, so their
 Everything is on the main page (no sidebar), under the pixel-art header strip.
 
 **Preview card** (left)
-- Upload a photo by dropping it on the box. **Change Image** starts over.
+- Upload a photo by dropping it on the box (JPG, PNG, WebP, GIF, BMP and TIFF work out of the box; AVIF needs a recent Pillow; iPhone HEIC/HEIF needs the optional `pip install pillow-heif`; camera RAW files must be exported to JPG or TIFF first). Photos are rotated by their EXIF orientation. **Change Image** starts over.
 - **View** switch:
   - **Side by side** — original and dehazed.
   - **Slider** — one image with a draggable divider between original (left) and dehazed (right).
@@ -89,7 +89,7 @@ Everything is on the main page (no sidebar), under the pixel-art header strip.
 - **07 Final Tone** — gamma, saturation, a gray-world colour balance and **colour restoration** (mid-tone white balance plus a saturation boost that is larger the more washed-out the image still is).
 - **Preset** (Balanced, Light haze, Dense fog, Maximum detail, Fog removal only, Course modules only, Traffic monitoring), **Auto-Enhance**, **Reset**, **Download Result**.
 
-**Video** card: upload a short clip, choose how many frames to process and whether to smooth over time (less flicker), then watch it as **Side by side** (original left, dehazed right, in sync), **Dehazed** or **Original**. **Applications** runs the traffic detection and the construction edge and line overlay on any of 12 sample frames (with an optional vehicle count over all of them), **Live detection** runs the vehicle detector on every frame of the whole clip (with a live preview while it runs) and plays the result as a video with boxes and counts, original left and dehazed right, with a per-frame count chart and a download, and **Graphs** plots contrast, edge pixels and brightness per frame plus the histogram, gamma and spectrum graphs of the picked frame. Download the dehazed mp4 below.
+**Video** card: upload a short clip from a fixed camera (mp4, mov, avi, mkv or webm), choose how many frames to process (10 to 300, default 90; frames are scaled to at most 640 px) and whether to smooth over time (less flicker), then watch it as **Side by side** (original left, dehazed right, in sync), **Dehazed** or **Original**. **Applications** runs the traffic detection and the construction edge and line overlay on any of 12 sample frames (with an optional vehicle count over all of them), **Live detection** runs the vehicle detector on every frame of the whole clip (with a live preview while it runs) and plays the result as a video with boxes and counts, original left and dehazed right, with a per-frame count chart and a download, and **Graphs** plots contrast, edge pixels and brightness per frame plus the histogram, gamma and spectrum graphs of the picked frame. Download the dehazed mp4 below.
 
 **Batch Processing** (below): upload several photos, process them with the current settings, then switch between **Table** (time and contrast per photo), **All images** (every original next to its dehazed version), **Side by side** and **Slider** (pick one photo), **Applications** (traffic detection and construction overlay for the picked photo, with an optional vehicle count for every photo) and **Graphs** (contrast and edge gain per photo, plus histogram, gamma and spectrum graphs of the picked photo), and download everything as a ZIP with a CSV of the results.
 
@@ -121,6 +121,131 @@ The pipeline (in `dehaze_core.py`) runs in this order; the numbers in brackets a
 - **Blur estimation** (`estimate_blur`): the width of the strongest edges is measured along 8 directions (the std of the edge's gradient profile, which equals the blur kernel's std). A sharp photo's own edge width is subtracted in quadrature; equal excess in all directions is Gaussian blur, excess that peaks in one direction is motion blur at that angle (box length = 3 x amount). Fog scales an edge's step and its gradient by the same factor, so the estimate does not depend on fog density.
 - Images larger than **1200 px** on the long edge are downscaled before processing.
 - The image-processing code is in `dehaze_core.py` (no Streamlit), so it can be tested and evaluated on its own.
+
+## Algorithms and equations
+
+Every formula below is taken from the code (`dehaze_core.py` unless another file is named), so it can be checked line by line. `s` is a stage's 0 to 100 slider strength.
+
+### Fog model (`simulate_fog`, `true_transmission`)
+
+```text
+I(x) = J(x) · t(x) + A · (1 − t(x))        t(x) = exp(−β · d(x))
+```
+
+`J` is the clear scene, `A` the airlight (fixed at (216, 223, 229) for simulation), `d` the depth and `β` the fog density. A photo has no depth map, so `d` is assumed to fall linearly from 0.95 at the bottom of the frame to 0.15 at the top. The synthetic streets use their true depth map.
+
+### 01 Dark channel prior (`estimate_transmission`, `recover_scene`, `far_detail`)
+
+```text
+dark(x)  = min over the patch Ω(x) of ( min over colour c of I_c(y) )      patch ≈ max(h, w) / 80, odd, at least 3
+A        = the pixel (or, if adaptive, the mean of the brightest fifth) among the 0.1 % of pixels with the brightest dark channel, floored at 0.1
+t(x)     = 1 − ω · min over Ω(x) of ( min over c of I_c(y) / A_c )
+t        = guided_filter(guide = gray image, src = t, radius = min(3·patch, …), ε = 1e-3), then clipped to [t0, 1]
+t0       = t0 · clip(1.5 − 1.6 · haze, 0.6, 1.4)   (adaptive mode only, kept inside 0.04 … 0.6)
+J(x)     = (I(x) − A) / max(t(x), 1e-3) + A
+```
+
+**Guided filter** (He et al.): `a = cov(G, p) / (var(G) + ε)`, `b = mean(p) − a · mean(G)`, output `mean(a) · G + mean(b)`, all means taken with a box filter. It makes `t` follow real edges, which removes the blocks and halos of the raw minimum-filter map.
+
+**Bright-neutral safeguard**: `J ← (1 − p) · J + p · I` with `p = 0.6 · smoothstep((L − 0.72) / 0.22) · clip((0.24 − S) / 0.18, 0, 1)` (`L` luminance, `S` HSV saturation), so bright, almost colourless areas keep part of the input.
+
+**Distant detail** (`far`): `Y' = Y + (far/100) · 2 · w · D`, with `D = clip(G₁.₂(Y) − G_σ(Y), −30, 30)` (`σ` = long edge / 120, at least 2) and weight `w = clip((1 − t) / 0.8, 0, 1)^1.5 · gate`. The gate compares the Sobel activity with the Immerkaer noise level, so flat noisy sky gets almost nothing.
+
+### 02 Wiener deblur (`wiener_deblur`)
+
+Luminance only, mirror-padded, in the Fourier domain:
+
+```text
+X = Y · H / (H² + K)                          K = noise damping (default 0.01)
+Gaussian blur   H = exp(−2π² σ² (fx² + fy²))
+Motion blur     H = sin(π n f) / (n · sin(π f))     n = 3 · amount taps, horizontal
+Any angle       H = FFT of the line kernel `motion_kernel(n, angle)`
+```
+
+### 03 Histogram stretch (`histogram_stretch`)
+
+```text
+p = 2 · s / 100  (% clipped at each end)       lo, hi = percentiles p and 100 − p of Y
+Y' = (Y − lo) · 255 / (hi − lo)                (skipped when s = 0 or hi − lo < 1)
+```
+
+### 03b CLAHE (`clahe_enhance`)
+
+CLAHE on the L channel of CIELAB with clip limit `1 + 3 · s / 100` and an `n × n` tile grid (2 to 32), blended with its input: `L' = (1 − m) · L + m · CLAHE(L)`, `m = min(1, s / 60)`.
+
+### 04 Frequency-domain filter (`frequency_enhancement`)
+
+```text
+F  = FFT(mirror-padded Y)                      D² = u² + v², measured from the centre of the spectrum
+Hhp = 1 − exp(−D² / (2 · D0²))                 Gaussian high-pass, D0 = cutoff radius (60 in the Balanced preset)
+R  = 1 + (g − 1) · Hhp                         g = 1 + 1.5 · s / 100
+Y' = IFFT(F · R)
+```
+
+`R` is 1 at the zero frequency and `g` at fine detail. The Gaussian high-pass has no sharp cut, so the result does not ring.
+
+### 05 Adaptive smoothing (`adaptive_smoothing`)
+
+Bilateral filter (Tomasi and Manduchi), 7 px diameter: `σ_colour = 10 + 0.6 · s`, `σ_space = 3 + 0.05 · s`. Flat areas and the noise that fog removal amplifies are smoothed; strong edges are kept.
+
+### 06 Adaptive sharpening (`adaptive_sharpening`)
+
+```text
+D        = clip(Y − G₁.₅(Y), −40, 40)                          clipped unsharp detail, so strong edges do not overshoot
+activity = G₂.₀( |Sobel gradient of Y| )
+σn       = sqrt(π/2) · Σ|Y ∗ N| / (6 · (W − 2) · (H − 2))       Immerkaer noise estimate, N = [[1,−2,1],[−2,4,−2],[1,−2,1]]
+floor    = clip(0.45 − 0.05 · σn, 0.15, 0.45)       knee = 6 + 4 · σn
+weight   = floor + (1 − floor) · clip(activity / knee, 0, 1)
+Y'       = Y + amount · weight · D                            amount = 2 · s / 100
+```
+
+Edges and texture get the full detail; flat, noisy areas keep only the `floor` share.
+
+### 07 Final tone (`colour_restore`, `tone_adjust`)
+
+```text
+Colour restoration (r)   gains_c = clip((mean_midtones / mean_c)^(r/100), 0.8, 1.25), mid-tones 0.12 < Y < 0.88
+                         saturation × (1 + (r/100) · clip((0.35 − S̄) / 0.35, 0, 1) · 0.6), about the luminance
+Gray-world balance (b)   gain_c = (mean_all / mean_c)^(b/100)
+Saturation               C' = Y + (C − Y) · saturation
+Gamma on luminance       RGB' = RGB · Y^(1/γ) / Y        (hue and saturation stay natural)
+```
+
+### Haze level and automatic strength (`haze_level`, `strength_scale`, `auto_strength_params`)
+
+```text
+haze = 1 − mean(t)                     (dark channel with ω = 0.95, t0 = 0.05)
+g    = clip(2.1 · haze − 0.35, 0.25, 1)
+hist, freq, smooth, sharpen, clahe, far  ←  × g
+ω    ←  min(0.95, ω · (0.35 + 0.65 · g))
+```
+
+### Metrics (`psnr`, `ssim`, `visibility_metrics`, `edge_f1`, `line_recall`)
+
+```text
+PSNR = 10 · log10(255² / MSE)                                       (99 for identical images)
+SSIM = mean( (2 μx μy + c1)(2 σxy + c2) / ((μx² + μy² + c1)(σx² + σy² + c2)) )   luminance, 11 × 11 Gaussian window
+e    = (n_restored − n_original) / n_original                       n = pixels whose 3 × 3 max − min is at least 5 % of the range
+r    = geometric mean of (|∇restored| + 1e-3) / (|∇original| + 1e-3) over the restored image's visible-edge pixels
+σ    = share of pixels that are newly black or white (≤ 1 or ≥ 254)
+```
+
+Canny uses fixed thresholds 50 and 150 after a 5 × 5 Gaussian blur, so fog's low contrast shows up. **Edge F1** matches edge pixels within 2 px of the reference map. **Line recall** is the share of reference segments (probabilistic Hough, threshold 50, minimum length 30) re-found by a segment within 5° passing close to the reference midpoint.
+
+### Video (`dehaze_video.py`)
+
+Per-frame estimates are smoothed with an exponential moving average, `s_t = w · s_{t−1} + (1 − w) · x_t`, `w = 0.9`:
+
+- the airlight, the histogram-stretch range, the gray-world colour gains and the haze level are smoothed everywhere;
+- the transmission map is smoothed **only where nothing moved**, so cars are not blended into the fog estimate;
+- a pixel counts as static when its Gaussian-blurred gray value changed by less than 10 grey levels since the previous frame;
+- static pixels are also denoised by blending the previous filtered frame into the current one with weight 0.6.
+
+With the haze-adaptive option, the video filter scales histogram, frequency, smoothing, sharpening and distant-detail strengths and ω, but **not CLAHE** (the still-image rule also scales CLAHE).
+
+### Vehicle and pedestrian detection (`detect.py`)
+
+YOLOv5n (COCO, ONNX, run with onnxruntime): the image is letterboxed to 640 × 640 (grey 114 padding), and each wanted class (person, bicycle, car, motorcycle, bus, truck) is scored separately as `objectness × class probability`, so a motorcycle whose best COCO class is something else is still found. Non-maximum suppression runs **within look-alike groups** only (car/bus/truck, bicycle/motorcycle, person), so one object gets one box but a rider and the motorcycle under them stay two objects. *Tiles* mode adds overlapping tiles of about 560 px (30 % overlap), drops boxes cut off by an inner tile edge and merges everything with the same suppression. Detections are matched to reference boxes greedily by class and IoU ≥ 0.5.
 
 ## Default settings and evaluation
 
@@ -201,7 +326,7 @@ Of the additions, **only CLAHE changes the result noticeably**: removing it rais
 
 ### Fog density: the default over-processes light haze
 
-The Balanced strengths are tuned for dense fog. The app can scale them from the **haze level** of the photo (`haze_level` = 1 - mean dark-channel transmission): `strength = clip(2.1 x haze - 0.35, 0.25, 1)`. The scaling includes the CLAHE strength. With simulated fog at four densities (SSIM, fixed default → adaptive):
+The Balanced strengths are tuned for dense fog. The app can scale them from the **haze level** of the photo (`haze_level` = 1 - mean dark-channel transmission): `strength = clip(2.1 x haze - 0.35, 0.25, 1)`. The scaling includes the CLAHE strength in the still-image pipeline (the video filter applies the same rule to the other strengths but not to CLAHE). With simulated fog at four densities (SSIM, fixed default → adaptive):
 
 | Scene type | Fog 0.4 | Fog 0.8 | Fog 1.6 | Fog 3.2 |
 | --- | ---: | ---: | ---: | ---: |
@@ -233,7 +358,7 @@ The motion angle is found to **about 3° from 2 px up** (mean error 2.9° real, 
 
 ### Video
 
-`dehaze_video.py` runs the pipeline on a video file (`python dehaze_video.py foggy.mp4 clear.mp4 --auto`). Per-frame processing flickers because the airlight, the transmission map, the stretch range and the colour balance move with sensor noise. `TemporalDehazer` smooths those estimates over time, smooths the transmission map only where nothing moved (so cars are not blended into the fog estimate), and averages the sensor noise on still pixels. On the synthetic traffic clip (flicker = mean frame-to-frame change of the output on static pixels, in grey levels):
+`dehaze_video.py` runs the pipeline on a video file (`python dehaze_video.py foggy.mp4 clear.mp4 --auto`). Options: `--auto` scales the strength to the haze level, `--auto-blur` undoes the blur measured on the first frame, `--no-temporal` processes every frame independently (flickers), `--max-dim N` downscales frames to a long edge of N px and `--max-frames N` stops after N frames. Output is H.264 when `imageio-ffmpeg` is installed. Per-frame processing flickers because the airlight, the transmission map, the stretch range and the colour balance move with sensor noise. `TemporalDehazer` smooths those estimates over time, smooths the transmission map only where nothing moved (so cars are not blended into the fog estimate), and averages the sensor noise on still pixels. On the synthetic traffic clip (flicker = mean frame-to-frame change of the output on static pixels, in grey levels):
 
 | Processing | Flicker | PSNR (dB) | SSIM |
 | --- | ---: | ---: | ---: |
@@ -280,7 +405,6 @@ The indicators also include contrast, entropy, edge-pixel share and colourfulnes
 - Detection uses YOLOv5n (AGPL, not committed to the repository; `detect.py` downloads it on first use). It drives the evaluation and the app's *Applications* view; the app's synthetic pixel-art sample cars are not detected, use a real street photo. The edge and line test uses one detector setting.
 - **Failure cases.** Very thick fog with no sky or distant structure gives the dark channel little to measure and the result stays flat; the bright-neutral safeguard reduces but cannot eliminate errors on white walls, snow and headlights; night scenes and coloured fog (yellow smog) break the gray-world and airlight assumptions; strong gamma and *Distant detail* raise noise in dark, far areas. On real fog the default's SSIM sits below dark-channel-only (see the methods chart): the brighter, higher-contrast look is bought with fidelity to the clear photo. Gamma 1.15 to 1.2 gives back some PSNR.
 - The temporal video filter assumes a fixed camera; a moving camera makes the motion mask cover the picture, and the filter then falls back to near per-frame behaviour. The video test is a synthetic clip.
-- The live demo at the link above shows an older version until it is redeployed from this code.
 
 ### Field-validation protocol
 
@@ -305,41 +429,49 @@ pip install -r requirements.txt
 streamlit run dehaze_app.py
 ```
 
-The app opens at `http://localhost:8501`. **Normal startup requires only these two terminal commands:**
+The app opens at `http://localhost:8501`. Keep the terminal window open while using it. These two commands (`pip install` and `streamlit run`) are all that normal use needs:
 
-```bash
-pip install -r requirements.txt
-streamlit run dehaze_app.py
-```
+- `requirements.txt` (Streamlit 1.62 or newer, NumPy, OpenCV headless, SciPy, Pillow, imageio-ffmpeg, onnxruntime) includes `onnxruntime`, so vehicle detection works without further installs. The YOLOv5n model file downloads on first use if `models/yolov5n.onnx` is missing.
+- **Optional:** `pip install pillow-heif` to open iPhone HEIC/HEIF photos.
+- The page ends with **Evaluation & Project Health**: run the real-world fog benchmark, upload foggy urban photos, inspect per-image and average metrics, download the CSV, contact sheet and human-review template, and run built-in system checks, all in the browser.
 
-Keep the terminal window open while using the browser app. `requirements.txt` includes `onnxruntime`, so vehicle detection works without further installs (the YOLOv5n model file downloads on first use if it is not already in `models/`). The page includes **Evaluation & Project Health** at the bottom: run the real-world fog benchmark, upload foggy urban photographs, inspect per-image and average metrics, download the CSV, contact sheet and human-review template, and run built-in system checks directly in the app. No separate evaluation or test command is required.
+The scripts below are optional developer and maintenance tools, not part of the normal workflow:
 
-The additional scripts below are optional developer/maintenance tools only; they are not part of the normal project workflow:
+| Command | What it does |
+| --- | --- |
+| `python evaluate.py` | Full reference-based benchmark (about 7 minutes); writes `results/` |
+| `python evaluate.py --fit-strength` | Refit the haze-adaptive strength rule (about 10 minutes) |
+| `python evaluate.py --real-world-only --max-dim 800` | Only the unpaired real urban fog evaluation |
+| `python evaluate.py --charts` | Only rewrite the SVG charts in `results/figures` (about 15 s) |
+| `python evaluate.py --export-urban` | Regenerate the synthetic urban scenes in `assets/` |
+| `python get_street_photos.py` | Download the optional clear street test photos |
+| `python dehaze_video.py in.mp4 out.mp4 --auto` | Dehaze a video from the command line |
+| `python test_core.py` | Core test suite |
+| `python test_real_world.py` | Smoke tests for the unpaired real-world evaluation |
 
-- `python evaluate.py` — full reference-based research benchmark.
-- `python evaluate.py --fit-strength` — refit the haze-adaptive strength rule.
-- `python evaluate.py --real-world-only --max-dim 800` — only the unpaired real urban fog evaluation.
-- `python evaluate.py --export-urban` — regenerate synthetic urban scenes.
-- `python get_street_photos.py` — download optional street test photos.
-- `python test_core.py` / `python test_real_world.py` — command-line test suites (the app has its own browser-based system checks).
+## Tests
+
+`python test_core.py` ends with `all checks passed` and covers, in order: every stage leaves the image untouched when switched off; the full pipeline keeps shape and dtype; simulated fog flattens edges and Wiener deblur undoes simulated blur (Gaussian and motion); the default settings beat doing nothing on the real foggy photos (PSNR and SSIM); the bright-neutral safeguard; the metrics themselves; blur estimation (type, size and angle); the synthetic urban set and the transmission estimate; the downstream edge and line tests; haze level and automatic strength; the visibility metrics; the detector helpers; and the video filter (less flicker than frame-by-frame, mp4 round trip). `python test_real_world.py` checks that the 20 bundled real foggy photos load, that the no-reference metrics read zero gain on an unchanged image, and that the haze-adaptive pipeline returns a valid image for each.
 
 ## Project structure
 
 ```
 Dehaze-App/
-├── dehaze_app.py          # Streamlit app (layout, controls, views, batch, evaluation panel)
+├── dehaze_app.py          # Streamlit app (layout, controls, views, batch, video, evaluation panel)
 ├── dehaze_core.py         # Image processing: stages, fog/blur simulation, blur estimation, metrics (no Streamlit)
-├── dehaze_video.py        # Temporal dehazing of video (less flicker) + CLI
+├── dehaze_video.py        # Temporal dehazing of video (less flicker), video detection + CLI
 ├── detect.py              # YOLOv5n vehicle/pedestrian detection (Applications views and evaluation)
 ├── get_street_photos.py   # Downloads the real street test photos
 ├── evaluate.py            # Ablation, street, detector, fog-density, blur, video, unpaired real-world experiments, SVG charts -> results/
 ├── test_core.py           # Checks for the core
 ├── test_real_world.py     # Smoke tests for the unpaired real-world evaluation
 ├── requirements.txt       # Python dependencies (app, including onnxruntime)
-├── models/                # yolov5n.onnx (downloaded on first use; not committed)
-├── results/               # Evaluation output: CSV files, summary.md, real_world_validation.md, comparison images, figures/
+├── .gitignore             # Ignores __pycache__/, models/, .venv/ and assets/test images/urban_real_clear/
+├── .devcontainer/         # Dev container configuration
 ├── .streamlit/
 │   └── config.toml        # Streamlit theme/config
+├── models/                # yolov5n.onnx (downloaded on first use; not committed)
+├── results/               # Evaluation output: CSV files, summary.md, real_world_validation.md, comparison images, figures/
 └── assets/
     ├── cars/              # Pixel-art car sprites (header strip)
     ├── clouds/            # Pixel-art cloud sprites (header strip)
@@ -347,7 +479,7 @@ Dehaze-App/
     │   ├── city_smog/                         # smoggy city streets and a foggy park
     │   ├── outdoor_fog_with_clear_reference/  # 7 hazy scenes, each with a clear reference
     │   ├── urban_real_foggy/                  # 20 real foggy or smoggy city photos (no clear references)
-    │   ├── urban_real_clear/                  # 10 real street photos (download with get_street_photos.py)
+    │   ├── urban_real_clear/                  # 10 real street photos (download with get_street_photos.py; not committed)
     │   └── urban_synthetic/                   # 6 synthetic city streets: clear, hazy (β 1.6) and true depth map
     └── Preview/           # Demo recording (preview.gif + full .mp4 recording)
 ```
@@ -364,7 +496,7 @@ Dehaze-App/
 
 ## Tech stack
 
-[Streamlit](https://streamlit.io/) · [OpenCV](https://opencv.org/) (headless) · [NumPy](https://numpy.org/) · [SciPy](https://scipy.org/) · [Pillow](https://python-pillow.org/) · imageio-ffmpeg (video output) · onnxruntime + YOLOv5n (vehicle detection in the Applications views and the evaluation)
+[Streamlit](https://streamlit.io/) · [OpenCV](https://opencv.org/) (headless) · [NumPy](https://numpy.org/) · [SciPy](https://scipy.org/) · [Pillow](https://python-pillow.org/) · imageio-ffmpeg (H.264 video output) · pillow-heif (optional, HEIC photos) · onnxruntime + YOLOv5n (vehicle detection in the Applications views and the evaluation)
 
 ## References
 
@@ -379,7 +511,7 @@ Dehaze-App/
 
 ## Author
 
- [ZannatulRaian](https://github.com/ZannatulRaian)
+Zannatul Raian ([@ZannatulRaian](https://github.com/ZannatulRaian))
 
 ## What changed in this version
 
